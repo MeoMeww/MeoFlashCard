@@ -158,7 +158,7 @@
     },
     progress(setId) { return this.data.progress[setId] || {}; },
   };
-  const newCard = () => ({ id: uid(), term: "", definition: "", mc: false, choices: [], tags: [] });
+  const newCard = () => ({ id: uid(), term: "", definition: "", mc: false, choices: [], tags: [], createdAt: now() });
 
   // Gộp 2 bản dữ liệu: mỗi bộ thẻ lấy bản có updatedAt mới hơn; tiến độ gộp theo từng thẻ
   function mergeData(local, remote) {
@@ -461,6 +461,7 @@
       lastUsed: s.lastUsed || 0,
       cards: (s.cards || []).map((c) => ({
         id: c.id || uid(),
+        createdAt: c.createdAt || 0,
         term: sanitize(c.term || ""),
         definition: sanitize(c.definition || ""),
         mc: !!c.mc,
@@ -473,7 +474,7 @@
   /* ===================== Router ===================== */
   function parseRoute() {
     const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
-    if (parts[0] === "set" && parts[1]) return { page: parts[2] || "edit", id: parts[1] };
+    if (parts[0] === "set" && parts[1]) return { page: parts[2] || "edit", id: parts[1], mode: parts[3] || "" };
     return { page: "library" };
   }
   let cleanup = null;
@@ -489,6 +490,7 @@
     if (r.page === "edit") return viewEdit(app, set);
     if (r.page === "study") return viewStudy(app, set);
     if (r.page === "quiz") return viewQuiz(app, set);
+    if (r.page === "mode" && window.MeoModes) return MeoModes.open(app, set, r.mode);
     location.hash = "#/";
   }
 
@@ -538,8 +540,8 @@
             <div>🕓 Last used ${new Date(used).toLocaleDateString("vi-VN")}</div>
           </div>
           <div class="actions">
-            <a class="btn small primary" href="#/set/${s.id}/study" data-stop>▶ Học</a>
-            <a class="btn small" href="#/set/${s.id}/quiz" data-stop>Kiểm tra</a>
+            <button class="btn small primary" data-modes="${s.id}" data-stop>▶ Học</button>
+            <a class="btn small" href="#/set/${s.id}/mode/mc" data-stop>Kiểm tra</a>
           </div></div>`;
       }).join("")}</div>`;
     };
@@ -741,7 +743,7 @@
           </div>
         </div>
         <div class="row">
-          <a class="btn" href="#/set/${set.id}/study">▶ Học</a>
+          <button class="btn" data-modes="${set.id}">▶ Học</button>
           <button class="btn" id="btnDetails">✎ Edit details</button>
         </div>
       </div>
@@ -1069,13 +1071,14 @@
   /* ===================== View: Study (lật thẻ) ===================== */
   function markUsed(set) { set.lastUsed = now(); Store.touch(set); }
 
-  function viewStudy(app, set) {
+  function viewStudy(app, set, filterFn) {
     markUsed(set);
     const opt = Object.assign({ shuffle: false, back: false, tag: "", onlyLearning: false }, lsGet("mc-study-opt", {}));
     let deck = [], idx = 0, flipped = false;
     const build = () => {
       const prog = Store.progress(set.id);
       let cards = set.cards.filter(usable);
+      if (filterFn) cards = cards.filter(filterFn);
       if (opt.tag) cards = cards.filter((c) => c.tags.includes(opt.tag));
       if (opt.onlyLearning) cards = cards.filter((c) => prog[c.id]?.s !== "know");
       deck = opt.shuffle ? shuffle(cards) : cards;
@@ -1091,7 +1094,7 @@
           <label class="row" style="font-size:14px"><input type="checkbox" id="optShuffle" ${opt.shuffle ? "checked" : ""}> Trộn</label>
           <label class="row" style="font-size:14px"><input type="checkbox" id="optBack" ${opt.back ? "checked" : ""}> Hiện Definition trước</label>
           <label class="row" style="font-size:14px"><input type="checkbox" id="optLearning" ${opt.onlyLearning ? "checked" : ""}> Chỉ thẻ chưa thuộc</label>
-          <a class="btn small" href="#/set/${set.id}/quiz">Kiểm tra</a>
+          <button class="btn small" data-modes="${set.id}">☰ Chế độ</button>
           <a class="btn small" href="#/set/${set.id}/edit">Sửa</a>
         </div>
       </div>
@@ -1139,7 +1142,7 @@
           <div class="row" style="justify-content:center">
             <button class="btn" id="again">Học lại từ đầu</button>
             <button class="btn primary" id="learnRest">Học các thẻ chưa thuộc</button>
-            <a class="btn" href="#/set/${set.id}/quiz">Làm bài kiểm tra</a></div></div>`;
+            <a class="btn" href="#/set/${set.id}/mode/mc">Làm bài kiểm tra</a></div></div>`;
         $("#again").onclick = () => { build(); draw(); };
         $("#learnRest").onclick = () => { $("#optLearning").checked = true; onOpt("onlyLearning", true); };
         $("#bar").style.width = "100%";
@@ -1200,8 +1203,9 @@
   }
 
   /* ===================== View: Quiz (trắc nghiệm) ===================== */
-  function buildQuestions(set, onlyIds) {
+  function buildQuestions(set, onlyIds, filterFn) {
     let cards = set.cards.filter(usable);
+    if (filterFn) cards = cards.filter(filterFn);
     if (onlyIds) cards = cards.filter((c) => onlyIds.includes(c.id));
     const pool = set.cards.filter(usable);
     const answerOf = (c) => (plainText(c.definition) ? c.definition : clozeTexts(c.term).map(esc).join(", "));
@@ -1237,15 +1241,15 @@
     }
     return qs;
   }
-  function viewQuiz(app, set, onlyIds) {
+  function viewQuiz(app, set, onlyIds, filterFn) {
     if (!onlyIds) markUsed(set);
-    const qs = buildQuestions(set, onlyIds);
+    const qs = buildQuestions(set, onlyIds, filterFn);
     let i = 0, score = 0;
     const wrong = [];
     app.innerHTML = `
       <div class="study-bar">
         <div><a href="#/">← Thư viện</a> · <b>${esc(set.title || "(Chưa đặt tên)")}</b> · Kiểm tra</div>
-        <div class="row"><a class="btn small" href="#/set/${set.id}/study">Lật thẻ</a></div>
+        <div class="row"><button class="btn small" data-modes="${set.id}">☰ Chế độ</button><a class="btn small" href="#/set/${set.id}/edit">Sửa</a></div>
       </div>
       <div class="progress"><div id="bar"></div></div>
       <div id="stage"></div>`;
@@ -1263,9 +1267,9 @@
           <div class="row" style="justify-content:center">
             ${wrong.length ? `<button class="btn primary" id="retryWrong">Làm lại ${wrong.length} câu sai</button>` : ""}
             <button class="btn" id="retryAll">Làm lại tất cả</button>
-            <a class="btn" href="#/set/${set.id}/study">Lật thẻ</a></div></div>`;
-        if ($("#retryWrong")) $("#retryWrong").onclick = () => viewQuiz(app, set, wrong.slice());
-        $("#retryAll").onclick = () => viewQuiz(app, set);
+            <a class="btn" href="#/set/${set.id}/mode/flashcards">Lật thẻ</a></div></div>`;
+        if ($("#retryWrong")) $("#retryWrong").onclick = () => viewQuiz(app, set, wrong.slice(), filterFn);
+        $("#retryAll").onclick = () => viewQuiz(app, set, null, filterFn);
         $("#bar").style.width = "100%";
         return;
       }
@@ -1336,6 +1340,10 @@
   }
 
   // expose cho debug/test
-  window.MeoCards = { Store, Sync, Auth, mergeData, sanitize, renderRich };
+  window.MeoCards = {
+    Store, Sync, Auth, mergeData, sanitize, renderRich, plainText, clozeTexts, esc, shuffle, toast, uid, now,
+    lsGet, lsSet, openDialog, confirmDialog, usable, allTags, markUsed, viewStudy, viewQuiz, route, $, $$,
+    setCleanup: (fn) => { if (cleanup) cleanup(); cleanup = fn; },
+  };
   boot();
 })();

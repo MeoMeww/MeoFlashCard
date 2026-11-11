@@ -2,8 +2,8 @@
  * Chiến lược: file của app → lấy từ mạng trước, mạng hỏng thì dùng bản đã cache
  * (nên mỗi lần sửa code trên GitHub, app tự lấy bản mới khi có mạng).
  * Tăng CACHE_VERSION khi muốn xoá cache cũ. */
-const CACHE_VERSION = "meocards-v1";
-const APP_FILES = ["./", "./index.html", "./styles.css", "./app.js", "./config.js", "./manifest.json",
+const CACHE_VERSION = "meocards-v2";
+const APP_FILES = ["./", "./index.html", "./styles.css", "./app.js", "./modes.js", "./config.js", "./manifest.json",
   "./icons/icon-192.png", "./icons/icon-512.png", "./icons/maskable-512.png"];
 
 self.addEventListener("install", (e) => {
