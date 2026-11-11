@@ -316,6 +316,40 @@
         body: JSON.stringify(data),
       });
     },
+    // Sao lưu thủ công: gộp rồi luôn ghi đè bản trên Drive
+    async push() {
+      while (this.busy) await new Promise((r) => setTimeout(r, 200));
+      this.busy = true;
+      this.status("Đang sao lưu…");
+      try {
+        if (!this.fileId) this.fileId = await this.findFile();
+        const remote = this.fileId ? await this.download(this.fileId) : null;
+        Store.data = mergeData(Store.data, remote).data;
+        Store.persist();
+        if (!this.fileId) this.fileId = await this.create(Store.data);
+        else await this.update(this.fileId, Store.data);
+        this.last = now();
+        this.status("✓ Đã sao lưu " + new Date(this.last).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" }), "ok");
+      } catch (e) { this.status("⚠ Sao lưu thất bại", "err"); throw e; }
+      finally { this.busy = false; }
+    },
+    // Tải sao lưu thủ công: lấy bản trên Drive thay cho dữ liệu trên máy
+    async pull() {
+      while (this.busy) await new Promise((r) => setTimeout(r, 200));
+      this.busy = true;
+      this.status("Đang tải sao lưu…");
+      try {
+        if (!this.fileId) this.fileId = await this.findFile();
+        if (!this.fileId) { this.status("Chưa có bản sao lưu trên Drive", "err"); return false; }
+        const remote = await this.download(this.fileId);
+        Store.data = Object.assign(emptyData(), remote);
+        Store.persist();
+        this.last = now();
+        this.status("✓ Đã tải sao lưu " + new Date(this.last).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" }), "ok");
+        return true;
+      } catch (e) { this.status("⚠ Tải sao lưu thất bại", "err"); throw e; }
+      finally { this.busy = false; }
+    },
     async now() {
       if (!Auth.user) return;
       if (!Auth.valid()) { this.status("⟳ Phiên Google hết hạn — bấm để kết nối lại", "err"); return; }
@@ -394,31 +428,69 @@
       <div class="actions"><button class="btn" value="cancel">Huỷ</button>
       <button class="btn ${danger ? "danger" : "primary"}" value="ok">${esc(okText)}</button></div>`).then((v) => v === "ok");
 
+  // Chống bấm liên tục: mỗi thao tác sao lưu / tải sao lưu cách nhau tối thiểu 10 giây
+  const COOLDOWN = 10_000;
+  let lastManualSync = 0;
   function openSettings(needLogin = false) {
+    const noCid = !CFG.GOOGLE_CLIENT_ID; // chỉ hỏi Client ID khi config.js chưa có
     openDialog(
       `<h2>⚙ Cài đặt</h2>
-      ${needLogin ? `<p>Để đăng nhập Google và đồng bộ qua Google Drive, app cần một <b>OAuth Client ID</b> (làm 1 lần).</p>` : ""}
+      ${noCid ? `<p>Để đăng nhập Google và đồng bộ qua Google Drive, app cần một <b>OAuth Client ID</b> (làm 1 lần).</p>
       <label class="field-label">Google OAuth Client ID</label>
       <input class="text" name="cid" placeholder="xxxxxxxx.apps.googleusercontent.com" value="${esc(Auth.clientId())}">
-      <small>Tạo tại Google Cloud Console → APIs &amp; Services → Credentials → Create OAuth client ID (Web application).
-      Thêm địa chỉ trang web này (<code>${esc(location.origin)}</code>) vào <i>Authorized JavaScript origins</i> và bật <b>Google Drive API</b>. Chi tiết trong README.</small>
+      <small>Tạo tại Google Cloud Console → Credentials → OAuth client ID (Web application), thêm <code>${esc(location.origin)}</code> vào <i>Authorized JavaScript origins</i>.</small>
+      <hr style="border:none;border-top:1px solid var(--border);width:100%">` : ""}
+      <label class="field-label">Google Drive</label>
+      ${Auth.user ? `<small>Đang đăng nhập: <b>${esc(Auth.user.email)}</b>. App tự đồng bộ sau mỗi thay đổi; hai nút dưới dùng khi bạn muốn chủ động.</small>
+      <div class="row">
+        <button class="btn small" value="push" id="btnPush">☁ Sao lưu lên Drive ngay</button>
+        <button class="btn small" value="pull" id="btnPull">⬇ Tải sao lưu từ Drive</button>
+      </div>
+      <small id="cooldownNote" class="muted"></small>` : `<small>Đăng nhập Google để sao lưu và đồng bộ giữa các thiết bị.</small>`}
       <hr style="border:none;border-top:1px solid var(--border);width:100%">
-      <label class="field-label">Sao lưu / khôi phục</label>
+      <label class="field-label">Sao lưu file trên máy</label>
       <div class="row">
         <button class="btn small" value="export">⬇ Xuất toàn bộ (JSON)</button>
         <button class="btn small" value="import">⬆ Nhập file JSON</button>
       </div>
-      <div class="actions"><button class="btn" value="cancel">Đóng</button><button class="btn primary" value="save">Lưu</button></div>`,
+      <div class="actions"><button class="btn" value="cancel">Đóng</button>${noCid ? `<button class="btn primary" value="save">Lưu</button>` : ""}</div>`,
       (form, action) => {
         if (action === "export") { exportJSON(Store.data, "meocards-backup.json"); return false; }
         if (action === "import") { importJSONFile(); return true; }
-        const cid = form.cid.value.trim();
-        lsSet(LS.clientId, cid);
-        Auth.tokenClient = null;
-        if (needLogin && cid) setTimeout(() => Auth.login(), 50);
-        toast("Đã lưu cài đặt");
+        if (action === "push" || action === "pull") { setTimeout(() => manualSync(action), 50); return true; }
+        if (action === "save" && noCid) {
+          const cid = form.cid.value.trim();
+          lsSet(LS.clientId, cid);
+          Auth.tokenClient = null;
+          if (needLogin && cid) setTimeout(() => Auth.login(), 50);
+          toast("Đã lưu cài đặt");
+        }
       }
     );
+    // khoá nút khi chưa hết 10 giây
+    const upd = () => {
+      const left = Math.ceil((lastManualSync + COOLDOWN - now()) / 1000);
+      const note = $("#cooldownNote");
+      $$("#btnPush, #btnPull").forEach((b) => (b.disabled = left > 0));
+      if (note) note.textContent = left > 0 ? `Vui lòng đợi ${left}s trước khi sao lưu / tải lại.` : "";
+      if (left > 0) setTimeout(upd, 500);
+    };
+    upd();
+  }
+  async function manualSync(kind) {
+    if (!Auth.user) { toast("Bạn chưa đăng nhập Google"); return; }
+    const left = Math.ceil((lastManualSync + COOLDOWN - now()) / 1000);
+    if (left > 0) { toast(`Vui lòng đợi ${left}s`); return; }
+    if (!Auth.valid()) { toast("Phiên Google hết hạn — đang kết nối lại…"); Auth.login(); return; }
+    if (kind === "pull" && !(await confirmDialog("Tải bản sao lưu từ Google Drive và THAY TOÀN BỘ dữ liệu trên máy này? Thay đổi chưa đồng bộ sẽ mất.", "Tải sao lưu", true))) return;
+    lastManualSync = now();
+    try {
+      if (kind === "push") { await Sync.push(); toast("✓ Đã sao lưu lên Google Drive"); }
+      else { const ok = await Sync.pull(); toast(ok ? "✓ Đã tải sao lưu từ Google Drive" : "Chưa có bản sao lưu nào trên Drive"); route(); }
+    } catch (e) {
+      console.error(e);
+      toast("Lỗi: " + (e.code === 401 ? "phiên Google hết hạn, hãy đăng nhập lại" : e.message));
+    }
   }
 
   function exportJSON(obj, name) {
