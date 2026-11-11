@@ -3,7 +3,7 @@
 // "OAuth client ID" loại "Web application". Xem README.md để biết từng bước.
 // Có thể để trống và nhập trong app (nút ⚙ Cài đặt) — giá trị sẽ lưu trên trình duyệt.
 window.APP_CONFIG = {
-  GOOGLE_CLIENT_ID: "",
+  GOOGLE_CLIENT_ID: "79174094008-9deecvgl09fc94ciujr00gvq8ovgnaa1.apps.googleusercontent.com",
   // Tên file dữ liệu trong thư mục ẩn appDataFolder của Google Drive
   DRIVE_FILE_NAME: "flashcards-data.json",
   // Tự động đồng bộ lại mỗi N giây khi đang mở app
