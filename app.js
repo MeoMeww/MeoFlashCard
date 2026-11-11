@@ -458,6 +458,7 @@
       description: String(s.description || ""),
       createdAt: s.createdAt || now(),
       updatedAt: s.updatedAt || now(),
+      lastUsed: s.lastUsed || 0,
       cards: (s.cards || []).map((c) => ({
         id: c.id || uid(),
         term: sanitize(c.term || ""),
@@ -518,27 +519,40 @@
       if (!items.length) { list.innerHTML = `<div class="empty">Không tìm thấy kết quả.</div>`; return; }
       list.innerHTML = `<div class="set-grid">${items.map((s) => {
         const prog = Store.progress(s.id);
+        const total = s.cards.length;
         const known = s.cards.filter((c) => prog[c.id]?.s === "know").length;
-        return `<div class="set-tile" data-id="${s.id}">
+        const pct = total ? Math.round((known / total) * 100) : 0;
+        const used = s.lastUsed || s.updatedAt;
+        return `<div class="set-tile" data-id="${s.id}" role="link" tabindex="0" title="Bấm để sửa bộ thẻ">
+          <div class="tile-tools">
+            <button class="tile-ico" data-act="dup" title="Nhân bản">⧉</button>
+            <button class="tile-ico" data-act="exp" title="Xuất JSON">⬇</button>
+            <button class="tile-ico" data-act="del" title="Xoá bộ thẻ"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9 3h6l1 1h4v2H4V4h4zM5 8h14l-1 13a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2z"/></svg></button>
+          </div>
           <h3>${esc(s.title || "(Chưa đặt tên)")}</h3>
-          <div class="meta">${s.cards.length} thẻ · đã thuộc ${known}/${s.cards.length} · sửa ${fmtTime(s.updatedAt)}</div>
-          ${s.description ? `<div class="muted" style="font-size:14px">${esc(s.description)}</div>` : ""}
+          <div class="memo-row"><span class="memo-label">Cards memorized</span><b>${known}/${total}</b></div>
+          <div class="memo-bar"><div style="width:${pct}%"></div></div>
+          <div class="tile-sep"></div>
+          <div class="tile-meta">
+            <div>🗂 ${total} ${total === 1 ? "card" : "cards"}</div>
+            <div>🕓 Last used ${new Date(used).toLocaleDateString("vi-VN")}</div>
+          </div>
           <div class="actions">
-            <a class="btn small primary" href="#/set/${s.id}/study">Học</a>
-            <a class="btn small" href="#/set/${s.id}/quiz">Kiểm tra</a>
-            <a class="btn small" href="#/set/${s.id}/edit">Sửa</a>
-            <button class="btn small" data-act="dup" title="Nhân bản">⧉</button>
-            <button class="btn small" data-act="exp" title="Xuất JSON">⬇</button>
-            <button class="btn small danger" data-act="del" title="Xoá">🗑</button>
+            <a class="btn small primary" href="#/set/${s.id}/study" data-stop>▶ Học</a>
+            <a class="btn small" href="#/set/${s.id}/quiz" data-stop>Kiểm tra</a>
           </div></div>`;
       }).join("")}</div>`;
     };
     draw();
     $("#q").oninput = (e) => draw(e.target.value.trim());
+    const openSet = (tile) => { location.hash = `#/set/${tile.dataset.id}/edit`; };
+    $("#list").onkeydown = (e) => { const t = e.target.closest(".set-tile"); if (t && e.target === t && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openSet(t); } };
     $("#list").onclick = async (e) => {
+      const tile = e.target.closest(".set-tile");
+      if (!tile) return;
       const btn = e.target.closest("button[data-act]");
-      if (!btn) return;
-      const id = btn.closest(".set-tile").dataset.id;
+      if (!btn) { if (!e.target.closest("[data-stop]")) openSet(tile); return; }
+      const id = tile.dataset.id;
       const s = Store.get(id);
       if (btn.dataset.act === "del") {
         if (await confirmDialog(`Xoá bộ "${s.title || "(Chưa đặt tên)"}"? Thao tác sẽ đồng bộ sang các thiết bị khác.`, "Xoá", true)) {
@@ -1053,7 +1067,10 @@
   const usable = (c) => plainText(c.term) || plainText(c.definition) || (c.mc && c.choices.some((x) => plainText(x.html)));
 
   /* ===================== View: Study (lật thẻ) ===================== */
+  function markUsed(set) { set.lastUsed = now(); Store.touch(set); }
+
   function viewStudy(app, set) {
+    markUsed(set);
     const opt = Object.assign({ shuffle: false, back: false, tag: "", onlyLearning: false }, lsGet("mc-study-opt", {}));
     let deck = [], idx = 0, flipped = false;
     const build = () => {
@@ -1221,6 +1238,7 @@
     return qs;
   }
   function viewQuiz(app, set, onlyIds) {
+    if (!onlyIds) markUsed(set);
     const qs = buildQuestions(set, onlyIds);
     let i = 0, score = 0;
     const wrong = [];

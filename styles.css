@@ -73,12 +73,23 @@ input.text, textarea.text, select.text {
 input.text:focus, textarea.text:focus, select.text:focus { border-color: var(--primary); background: #fff; box-shadow: 0 0 0 3px var(--primary-soft); }
 .set-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
 .set-tile {
-  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px;
+  position: relative; background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+  padding: 18px 18px 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 10px; cursor: pointer; transition: box-shadow .15s, transform .15s;
 }
-.set-tile h3 { margin: 0; font-size: 17px; word-break: break-word; }
-.set-tile .meta { font-size: 13px; color: var(--muted); }
-.set-tile .actions { margin-top: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.set-tile:hover { box-shadow: 0 6px 20px rgba(16, 24, 40, .1); transform: translateY(-1px); }
+.set-tile:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.set-tile h3 { margin: 18px 0 2px; font-size: 20px; font-weight: 700; word-break: break-word; padding-right: 8px; }
+.tile-tools { position: absolute; top: 10px; right: 10px; display: flex; gap: 2px; }
+.tile-ico { border: none; background: transparent; color: #6b7280; width: 30px; height: 30px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 15px; }
+.tile-ico:hover { background: #eef0f5; color: var(--text); }
+.tile-ico[data-act="del"]:hover { color: var(--danger); background: #fee2e2; }
+.memo-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
+.memo-label { color: var(--muted); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; font-size: 11px; }
+.memo-bar { height: 7px; background: #e5e7eb; border-radius: 6px; overflow: hidden; }
+.memo-bar > div { height: 100%; background: var(--ok); border-radius: 6px; transition: width .3s; }
+.tile-sep { border-top: 1px solid var(--border); margin: 4px 0 2px; }
+.tile-meta { display: grid; gap: 6px; font-size: 14px; color: var(--text); }
+.set-tile .actions { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
 .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
 .empty .big { font-size: 48px; }
 
