@@ -480,6 +480,7 @@
     if (cleanup) { cleanup(); cleanup = null; }
     const r = parseRoute();
     const app = $("#app");
+    app.classList.toggle("wide", r.page === "edit");
     window.scrollTo(0, 0);
     if (r.page === "library") return viewLibrary(app);
     const set = Store.get(r.id);
@@ -713,47 +714,148 @@
 
   /* ===================== View: Edit set ===================== */
   function viewEdit(app, set) {
-    app.innerHTML = `
-      <div class="page-head">
-        <h1>${set.title ? "Sửa bộ thẻ" : "Tạo bộ thẻ mới"}</h1>
+    const view = Object.assign({ layout: "grid" }, lsGet("mc-edit-view", {}));
+    const render = () => {
+      const n = set.cards.length;
+      app.innerHTML = `
+      <div class="edit-head">
+        <div>
+          <h1 class="set-title">${esc(set.title || "Bộ thẻ chưa đặt tên")}</h1>
+          <div class="row" style="margin-top:8px">
+            <span class="chip">${n} ${n === 1 ? "card" : "cards"}</span>
+            ${set.description ? `<span class="muted" style="font-size:14px">${esc(set.description)}</span>` : ""}
+          </div>
+        </div>
         <div class="row">
-          <button class="btn" id="btnBulk">⚡ Nhập nhanh</button>
-          <a class="btn" href="#/set/${set.id}/study">Học</a>
-          <a class="btn primary" href="#/">Xong</a>
+          <a class="btn" href="#/set/${set.id}/study">▶ Học</a>
+          <button class="btn" id="btnDetails">✎ Edit details</button>
         </div>
       </div>
-      <div class="set-meta">
-        <input class="text title-input" id="title" placeholder="Tên bộ thẻ, ví dụ: IELTS Vocabulary – Unit 1" value="${esc(set.title)}">
-        <textarea class="text" id="desc" rows="2" placeholder="Mô tả (tuỳ chọn)">${esc(set.description)}</textarea>
+      <div class="edit-toolbar">
+        <div class="search-wrap"><span class="search-ico">🔍</span><input class="text" id="q" placeholder="Search cards..."></div>
+        <div class="seg" id="layoutSeg">
+          <button data-l="list" class="${view.layout === "list" ? "on" : ""}">☰ List</button>
+          <button data-l="grid" class="${view.layout === "grid" ? "on" : ""}">▦ Grid</button>
+          <button data-l="sheet" class="${view.layout === "sheet" ? "on" : ""}">▤ Spreadsheet</button>
+        </div>
+        <button class="btn" id="btnReverse" title="Tạo thêm thẻ đảo ngược (Definition → Term) cho mọi thẻ">⇄ Also create reverse card</button>
+        <button class="btn" id="btnBulk">⚡ Nhập nhanh</button>
+        <a class="btn primary" id="btnSave" href="#/">✓ Save cards</a>
       </div>
-      <div class="cards" id="cards"></div>
-      <button class="add-card-btn" id="btnAdd">＋ THÊM THẺ</button>`;
-    const save = debounce(() => Store.touch(set), 400);
-    $("#title").oninput = (e) => { set.title = e.target.value; save(); };
-    $("#desc").oninput = (e) => { set.description = e.target.value; save(); };
-    if (!set.title) setTimeout(() => $("#title").focus(), 0);
+      <div id="cardsWrap"></div>
+      <div class="add-card-wrap"><button class="add-card-btn" id="btnAdd">＋ Add Card</button></div>`;
 
-    const cardsEl = $("#cards");
+      $("#btnDetails").onclick = () => editDetails(set, render);
+      $("#btnBulk").onclick = () => bulkImport(set);
+      $("#layoutSeg").onclick = (e) => {
+        const b = e.target.closest("button[data-l]");
+        if (!b) return;
+        view.layout = b.dataset.l;
+        lsSet("mc-edit-view", view);
+        render();
+      };
+      $("#btnReverse").onclick = async () => {
+        const src = set.cards.filter((c) => !c.mc && plainText(c.term) && plainText(c.definition));
+        if (!src.length) { toast("Cần thẻ có cả Term và Definition"); return; }
+        const key = (a, b) => plainText(a).toLowerCase() + "\u0000" + plainText(b).toLowerCase();
+        const existing = new Set(set.cards.map((c) => key(c.term, c.definition)));
+        const add = src.filter((c) => !existing.has(key(c.definition, c.term)));
+        if (!add.length) { toast("Mọi thẻ đã có bản đảo ngược"); return; }
+        if (!(await confirmDialog(`Tạo thêm ${add.length} thẻ đảo ngược (Definition làm Term)?`, "Tạo thẻ"))) return;
+        for (const c of add) set.cards.push({ ...newCard(), term: c.definition, definition: c.term, tags: c.tags.slice() });
+        Store.touch(set);
+        toast(`Đã thêm ${add.length} thẻ`);
+        render();
+      };
+      $("#btnAdd").onclick = () => {
+        const c = newCard();
+        set.cards.push(c);
+        Store.touch(set);
+        if (view.layout === "sheet") { render(); const rows = $$("#sheet tbody tr"); rows[rows.length - 1]?.querySelector("input")?.focus(); }
+        else { addCardEl(c, true); updateCount(); }
+      };
+      $("#q").oninput = (e) => filterCards(e.target.value.trim().toLowerCase());
+      drawCards();
+    };
+
+    const save = debounce(() => Store.touch(set), 400);
+    const updateCount = () => { const c = $(".chip"); if (c) c.textContent = `${set.cards.length} ${set.cards.length === 1 ? "card" : "cards"}`; };
+    let cardsEl = null;
     const renumber = () => $$(".card-num", cardsEl).forEach((n, i) => (n.textContent = "#" + (i + 1)));
     const addCardEl = (card, focus = false) => {
       const el = buildCardEditor(set, card, save, () => {
         set.cards = set.cards.filter((c) => c !== card);
         el.remove();
         renumber();
+        updateCount();
         Store.touch(set);
       });
+      el.dataset.id = card.id;
       cardsEl.append(el);
       renumber();
       if (focus) { el.scrollIntoView({ behavior: "smooth", block: "center" }); $(".rt", el).focus(); }
     };
-    set.cards.forEach((c) => addCardEl(c));
-    $("#btnAdd").onclick = () => {
-      const c = newCard();
-      set.cards.push(c);
-      Store.touch(set);
-      addCardEl(c, true);
+    const filterCards = (q) => {
+      if (view.layout === "sheet") {
+        $$("#sheet tbody tr").forEach((tr) => { tr.style.display = !q || tr.textContent.toLowerCase().includes(q) || [...tr.querySelectorAll("input")].some((i) => i.value.toLowerCase().includes(q)) ? "" : "none"; });
+        return;
+      }
+      $$(".card-editor", cardsEl).forEach((el) => {
+        const c = set.cards.find((x) => x.id === el.dataset.id);
+        const hay = c ? (plainText(c.term) + " " + plainText(c.definition) + " " + c.tags.join(" ") + " " + c.choices.map((x) => plainText(x.html)).join(" ")).toLowerCase() : "";
+        el.style.display = !q || hay.includes(q) ? "" : "none";
+      });
     };
-    $("#btnBulk").onclick = () => bulkImport(set);
+    const drawCards = () => {
+      const wrap = $("#cardsWrap");
+      if (view.layout === "sheet") { drawSheet(wrap); return; }
+      wrap.innerHTML = `<div class="cards ${view.layout === "grid" ? "cards-grid" : "cards-list"}" id="cards"></div>`;
+      cardsEl = $("#cards");
+      set.cards.forEach((c) => addCardEl(c));
+    };
+    // Spreadsheet view: bảng Term / Definition / Tags, nhập text thuần (giữ định dạng của thẻ chưa sửa)
+    const drawSheet = (wrap) => {
+      wrap.innerHTML = `<div class="sheet-wrap"><table class="sheet" id="sheet">
+        <thead><tr><th style="width:44px">#</th><th>Term</th><th>Definition</th><th style="width:22%">Tags (cách nhau bằng dấu phẩy)</th><th style="width:44px"></th></tr></thead>
+        <tbody>${set.cards.map((c, i) => `<tr data-id="${c.id}"><td class="muted">${i + 1}</td>
+          <td><input class="cell" data-f="term" value="${esc(plainText(c.term))}" ${c.mc ? 'title="Thẻ Multiple choice — sửa lựa chọn ở chế độ Grid/List"' : ""}></td>
+          <td><input class="cell" data-f="definition" value="${esc(plainText(c.definition))}" placeholder="${c.mc ? "(Multiple choice)" : ""}"></td>
+          <td><input class="cell" data-f="tags" value="${esc(c.tags.join(", "))}"></td>
+          <td><button class="icon-btn" data-del title="Xoá thẻ">✕</button></td></tr>`).join("")}</tbody></table>
+        <div class="hint" style="text-align:left;padding:8px 4px">Tab / Enter để di chuyển giữa các ô. Ô có định dạng (đậm, màu, [...]) sẽ bị chuyển về chữ thường khi bạn sửa ở đây.</div></div>`;
+      const tbl = $("#sheet");
+      tbl.addEventListener("input", (e) => {
+        const inp = e.target.closest("input.cell");
+        if (!inp) return;
+        const c = set.cards.find((x) => x.id === inp.closest("tr").dataset.id);
+        if (!c) return;
+        const f = inp.dataset.f;
+        if (f === "tags") c.tags = inp.value.split(",").map((s) => s.trim()).filter(Boolean);
+        else if (plainText(c[f]) !== inp.value) c[f] = esc(inp.value);
+        save();
+      });
+      tbl.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        const cells = $$("input.cell", tbl);
+        const i = cells.indexOf(e.target);
+        if (i < 0) return;
+        const next = cells[i + 3];
+        if (next) next.focus();
+        else $("#btnAdd").click();
+      });
+      tbl.addEventListener("click", async (e) => {
+        const b = e.target.closest("button[data-del]");
+        if (!b) return;
+        const tr = b.closest("tr");
+        set.cards = set.cards.filter((x) => x.id !== tr.dataset.id);
+        Store.touch(set);
+        render();
+      });
+    };
+
+    render();
+    if (!set.title) setTimeout(() => editDetails(set, render), 50);
     const flush = () => { if (set.title || set.cards.some((c) => plainText(c.term) || plainText(c.definition))) Store.touch(set); };
     window.addEventListener("beforeunload", flush);
     cleanup = () => {
@@ -762,6 +864,23 @@
       const blank = !set.title.trim() && !set.description.trim() && set.cards.every((c) => !plainText(c.term) && !plainText(c.definition));
       if (blank) Store.remove(set.id);
     };
+  }
+
+  function editDetails(set, onDone) {
+    openDialog(
+      `<h2>Chi tiết bộ thẻ</h2>
+      <label class="field-label">Tên bộ thẻ</label>
+      <input class="text" name="title" placeholder="Ví dụ: IELTS Vocabulary – Unit 1" value="${esc(set.title)}">
+      <label class="field-label">Mô tả (tuỳ chọn)</label>
+      <textarea class="text" name="desc" rows="3">${esc(set.description)}</textarea>
+      <div class="actions"><button class="btn" value="cancel">Huỷ</button><button class="btn primary" value="ok">Lưu</button></div>`,
+      (form) => {
+        set.title = form.title.value.trim();
+        set.description = form.desc.value.trim();
+        Store.touch(set);
+        onDone();
+      }
+    );
   }
 
   function buildCardEditor(set, card, save, onDelete) {
@@ -782,6 +901,7 @@
       <div class="mc-area"></div>
       <div class="field-label def-label"></div>
       <div class="slot-def"></div>
+      <div class="card-tools"><button type="button" class="btn small btn-translate" title="Mở Google Dịch với nội dung Term">🌐 Translate</button></div>
       <div class="tags-row"><span class="field-label">Tags</span><span class="tag-list"></span><button class="add-tag" type="button">Add Tag</button></div>`;
 
     const term = makeEditor({ html: card.term, placeholder: "Term", onChange: (h) => { if (h !== card.term) { card.term = h; save(); } } });
@@ -882,6 +1002,11 @@
     };
     drawTags();
 
+    $(".btn-translate", el).onclick = () => {
+      const t = plainText(card.term);
+      if (!t) { toast("Nhập Term trước"); return; }
+      window.open("https://translate.google.com/?sl=auto&tl=vi&text=" + encodeURIComponent(t) + "&op=translate", "_blank", "noopener");
+    };
     $(".btn-del", el).onclick = onDelete;
     return el;
   }

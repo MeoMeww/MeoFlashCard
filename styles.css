@@ -58,6 +58,7 @@ button { font: inherit; cursor: pointer; }
 
 /* ---------- Layout ---------- */
 main { max-width: 960px; margin: 0 auto; padding: 24px 16px 80px; }
+main.wide { max-width: none; padding: 20px 20px 80px; }
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
 .page-head h1 { font-size: 24px; margin: 0; }
 .muted { color: var(--muted); }
@@ -81,10 +82,29 @@ input.text:focus, textarea.text:focus, select.text:focus { border-color: var(--p
 .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
 .empty .big { font-size: 48px; }
 
-/* ---------- Set editor ---------- */
-.set-meta { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 18px; display: grid; gap: 10px; }
-.set-meta .title-input { font-size: 20px; font-weight: 600; }
+/* ---------- Set editor (bố cục kiểu Flashcards World) ---------- */
+.edit-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding-bottom: 16px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+.set-title { font-size: 28px; font-weight: 600; margin: 0; word-break: break-word; }
+.chip { display: inline-block; border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; font-size: 13px; color: var(--muted); background: var(--panel); }
+.edit-toolbar { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
+.search-wrap { flex: 1; min-width: 220px; position: relative; }
+.search-wrap .search-ico { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); font-size: 13px; opacity: .6; }
+.search-wrap input { padding-left: 34px; }
+.seg { display: inline-flex; background: var(--input); border-radius: 10px; padding: 3px; gap: 2px; }
+.seg button { border: none; background: transparent; padding: 6px 12px; border-radius: 8px; font-weight: 600; font-size: 13px; color: var(--muted); }
+.seg button.on { background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
 .cards { display: grid; gap: 14px; }
+.cards-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); align-items: start; }
+.cards-list { grid-template-columns: 1fr; max-width: 960px; margin: 0 auto; }
+.card-tools { display: flex; gap: 6px; flex-wrap: wrap; }
+.add-card-wrap { display: flex; justify-content: center; margin-top: 28px; }
+.sheet-wrap { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow-x: auto; }
+.sheet { width: 100%; border-collapse: collapse; min-width: 640px; }
+.sheet th { text-align: left; font-size: 13px; color: var(--muted); font-weight: 600; padding: 10px 8px; border-bottom: 1px solid var(--border); background: #fafbfe; }
+.sheet td { padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.sheet td.muted { padding-left: 12px; font-size: 13px; }
+.sheet input.cell { width: 100%; border: 1px solid transparent; background: transparent; padding: 8px 8px; font: inherit; border-radius: 8px; outline: none; }
+.sheet input.cell:focus { background: var(--primary-soft); border-color: var(--primary); }
 .card-editor {
   background: var(--panel); border: 1px solid var(--card-border); border-radius: var(--radius);
   padding: 16px 18px; display: grid; gap: 10px;
@@ -105,14 +125,15 @@ input.text:focus, textarea.text:focus, select.text:focus { border-color: var(--p
 /* Rich text */
 .rt-wrap { display: grid; gap: 6px; }
 .rt-toolbar-slot { min-height: 30px; }
-.rt-toolbar { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.rt-toolbar { display: flex; align-items: center; gap: 1px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.rt-toolbar::-webkit-scrollbar { display: none; }
 .rt-toolbar button, .rt-toolbar .color-btn {
-  border: none; background: transparent; color: #3f4553; min-width: 30px; height: 30px; border-radius: 6px;
-  display: inline-flex; align-items: center; justify-content: center; font-size: 14px; position: relative; padding: 0 6px;
+  border: none; background: transparent; color: #3f4553; min-width: 26px; height: 30px; border-radius: 6px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 13px; position: relative; padding: 0 4px;
 }
 .rt-toolbar button:hover, .rt-toolbar .color-btn:hover { background: #eef0f5; }
 .rt-toolbar button.active { background: var(--primary-soft); color: var(--primary); }
-.rt-toolbar .sep { width: 1px; height: 18px; background: var(--border); margin: 0 6px; }
+.rt-toolbar .sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; flex-shrink: 0; }
 .rt-toolbar .color-btn { cursor: pointer; }
 .rt-toolbar .color-btn input { position: absolute; opacity: 0; inset: 0; width: 100%; height: 100%; cursor: pointer; }
 .rt-toolbar .a-letter { font-weight: 700; text-decoration: underline; text-decoration-color: #e11d48; text-decoration-thickness: 3px; }
@@ -142,8 +163,8 @@ input.text:focus, textarea.text:focus, select.text:focus { border-color: var(--p
 .add-tag { border: 1px dashed #c3c8d4; background: #fff; border-radius: 999px; padding: 5px 14px; font-weight: 600; font-size: 13px; color: var(--text); }
 .tag-input { border: 1px solid var(--primary); border-radius: 999px; padding: 5px 12px; font: inherit; font-size: 13px; outline: none; width: 130px; }
 
-.add-card-btn { width: 100%; padding: 18px; border: 2px dashed #c3c8d4; background: transparent; border-radius: var(--radius); font-weight: 700; color: #3f4553; margin-top: 14px; }
-.add-card-btn:hover { border-color: var(--primary); color: var(--primary); }
+.add-card-btn { min-width: min(420px, 100%); padding: 14px 32px; border: none; background: var(--primary); color: #fff; border-radius: 999px; font-weight: 700; font-size: 16px; box-shadow: 0 4px 14px rgba(37, 99, 235, .3); }
+.add-card-btn:hover { background: #1d4ed8; }
 
 /* ---------- Study ---------- */
 .study-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
@@ -195,6 +216,8 @@ dialog::backdrop { background: rgba(15, 20, 30, .45); }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
 @media (max-width: 600px) {
+  .set-title { font-size: 22px; }
+  .seg button { padding: 6px 8px; }
   .topbar { padding: 8px 12px; }
   .sync-status { display: none; }
   .flip-face { font-size: 20px; }
