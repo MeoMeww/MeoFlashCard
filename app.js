@@ -1696,22 +1696,70 @@
     const bg = t.bg || "#f6f7fb";
     document.documentElement.style.setProperty("--bg", bg);
     // nền tối → đổi màu chữ / panel cho dễ đọc
-    const dark = (() => { const m = bg.match(/^#([0-9a-f]{6})$/i); if (!m) return false; const v = parseInt(m[1], 16); const r = v >> 16, g = (v >> 8) & 255, b = v & 255; return (r * 299 + g * 587 + b * 114) / 1000 < 128; })();
+    const m = bg.match(/^#([0-9a-f]{6})$/i);
+    const rgb = m ? [parseInt(m[1].slice(0, 2), 16), parseInt(m[1].slice(2, 4), 16), parseInt(m[1].slice(4, 6), 16)] : [246, 247, 251];
+    const dark = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000 < 128;
     document.body.classList.toggle("dark", dark);
+    const img = t.img || lsGet("mc-theme-img", "");
+    if (img) {
+      const dim = Math.min(0.95, Math.max(0, (t.dim ?? 40) / 100));
+      document.body.style.backgroundImage = `linear-gradient(rgba(${rgb.join(",")},${dim}), rgba(${rgb.join(",")},${dim})), url("${img}")`;
+      document.body.classList.add("has-img");
+    } else {
+      document.body.style.backgroundImage = "";
+      document.body.classList.remove("has-img");
+    }
+  }
+  // Ảnh nền: thu nhỏ còn tối đa 1600px, nén JPEG rồi lưu trên máy (không đồng bộ lên Drive vì dung lượng)
+  function pickBgImage(onDone) {
+    const inp = document.createElement("input");
+    inp.type = "file"; inp.accept = "image/*";
+    inp.onchange = () => {
+      const f = inp.files[0]; if (!f) return;
+      const img = new Image();
+      img.onload = () => {
+        const max = 1600, r = Math.min(1, max / Math.max(img.width, img.height));
+        const cv = document.createElement("canvas"); cv.width = Math.round(img.width * r); cv.height = Math.round(img.height * r);
+        cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+        let q = 0.82, data = cv.toDataURL("image/jpeg", q);
+        while (data.length > 2_500_000 && q > 0.4) { q -= 0.1; data = cv.toDataURL("image/jpeg", q); }
+        try { localStorage.setItem("mc-theme-img", JSON.stringify(data)); } catch { toast("Ảnh quá lớn, hãy chọn ảnh nhỏ hơn"); return; }
+        URL.revokeObjectURL(img.src);
+        onDone(data);
+      };
+      img.onerror = () => toast("Không đọc được ảnh");
+      img.src = URL.createObjectURL(f);
+    };
+    inp.click();
   }
   function openThemeDialog() {
     const cur = lsGet("mc-theme", {});
+    const hasImg = !!lsGet("mc-theme-img", "");
     openDialog(
       `<h2>🎨 Màu nền</h2>
       <div class="bg-grid">${BG_PRESETS.map(([n, c]) => `<button type="button" class="bg-swatch ${cur.bg === c || (!cur.bg && c === "#f6f7fb") ? "on" : ""}" data-bg="${c}" style="background:${c}"><span>${n}</span></button>`).join("")}</div>
       <label class="row" style="margin-top:6px">Màu khác: <input type="color" id="bgCustom" value="${esc(cur.bg || "#f6f7fb")}"></label>
+      <hr style="border:none;border-top:1px solid var(--border);width:100%">
+      <label class="field-label">Ảnh nền</label>
+      <div class="row">
+        <button class="btn" value="img" type="submit">🖼 ${hasImg ? "Đổi ảnh" : "Chọn ảnh từ máy"}</button>
+        ${hasImg ? `<button class="btn" value="noimg" type="submit">✕ Bỏ ảnh</button>` : ""}
+      </div>
+      <div class="row" id="dimRow" ${hasImg ? "" : 'style="display:none"'}><span style="font-size:14px">Làm mờ ảnh (phủ màu nền):</span><input type="range" id="dim" min="0" max="90" value="${cur.dim ?? 40}" style="flex:1"><b id="dimVal">${cur.dim ?? 40}%</b></div>
+      <small class="muted">Ảnh chỉ lưu trên thiết bị này, không đồng bộ lên Drive.</small>
       <div class="actions"><button class="btn" value="reset">Mặc định</button><button class="btn primary" value="cancel">Xong</button></div>`,
-      (form, action) => { if (action === "reset") { lsSet("mc-theme", {}); applyTheme({}); return false; } }
+      (form, action) => {
+        if (action === "reset") { lsSet("mc-theme", {}); lsDel("mc-theme-img"); applyTheme({}); setTimeout(openThemeDialog, 30); return true; }
+        if (action === "img") { setTimeout(() => pickBgImage(() => { applyTheme(lsGet("mc-theme", {})); openThemeDialog(); }), 30); return true; }
+        if (action === "noimg") { lsDel("mc-theme-img"); applyTheme(lsGet("mc-theme", {})); setTimeout(openThemeDialog, 30); return true; }
+      }
     );
     const form = $("#dialogForm");
-    const pick = (bg) => { lsSet("mc-theme", { bg }); applyTheme({ bg }); $$(".bg-swatch", form).forEach((b) => b.classList.toggle("on", b.dataset.bg === bg)); };
+    const save = (patch) => { const t = { ...lsGet("mc-theme", {}), ...patch }; lsSet("mc-theme", t); applyTheme(t); return t; };
+    const pick = (bg) => { save({ bg }); $$(".bg-swatch", form).forEach((b) => b.classList.toggle("on", b.dataset.bg === bg)); };
     form.onclick = (e) => { const b = e.target.closest(".bg-swatch"); if (b) pick(b.dataset.bg); };
     $("#bgCustom", form).oninput = (e) => pick(e.target.value);
+    $("#dim", form).oninput = (e) => { $("#dimVal", form).textContent = e.target.value + "%"; save({ dim: +e.target.value }); };
   }
 
   /* ===================== Boot ===================== */

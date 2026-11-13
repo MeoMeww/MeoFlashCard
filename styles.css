@@ -392,6 +392,8 @@ body.dark .quiz-opt.wrong, body.dark .match-item.bad { background: #7f1d1d; colo
 body.dark .toast { background: #e5e7eb; color: #1f2430; }
 body.dark .bg-swatch span { background: rgba(0,0,0,.6); color: #fff; }
 @media (max-width: 600px) { .bg-grid { grid-template-columns: repeat(3, 1fr); } }
+body.has-img { background-size: cover; background-position: center; background-attachment: fixed; background-repeat: no-repeat; }
+body.has-img .topbar { background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(6px); }
 
 /* Toast */
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px); background: #1f2430; color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 14px; opacity: 0; pointer-events: none; transition: .25s; z-index: 100; }
