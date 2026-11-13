@@ -124,13 +124,44 @@
   // data = { version, sets: {id: Set}, progress: {setId: {cardId: {s:'know'|'learning', t}}} }
   // Set  = { id, title, description, cards: Card[], createdAt, updatedAt, deleted? }
   // Card = { id, term, definition, mc, choices: [{id, html, correct}], tags: [] }
-  const emptyData = () => ({ version: 1, sets: {}, progress: {} });
+  const emptyData = () => ({ version: 1, sets: {}, progress: {}, categories: {} });
+  // Danh mục mặc định (người dùng có thể sửa/xoá/thêm)
+  const DEFAULT_CATEGORIES = [
+    { id: "cat-vocab", name: "Từ vựng", color: "#2563eb" },
+    { id: "cat-grammar", name: "Ngữ pháp", color: "#7c3aed" },
+    { id: "cat-ielts", name: "IELTS / TOEIC", color: "#0891b2" },
+    { id: "cat-science", name: "Khoa học", color: "#16a34a" },
+    { id: "cat-social", name: "Xã hội", color: "#f59e0b" },
+    { id: "cat-other", name: "Khác", color: "#6b7280" },
+  ];
+  const CATEGORY_COLORS = ["#2563eb", "#7c3aed", "#db2777", "#dc2626", "#ea580c", "#f59e0b", "#16a34a", "#0d9488", "#0891b2", "#6b7280", "#1f2937", "#a16207"];
   const Store = {
     who: null,
     data: emptyData(),
     load(who) {
       this.who = who || null;
       this.data = Object.assign(emptyData(), lsGet(LS.data(who), emptyData()));
+      this.ensureCategories();
+    },
+    ensureCategories() {
+      if (!this.data.categories) this.data.categories = {};
+      if (!Object.keys(this.data.categories).length) {
+        const t = now();
+        DEFAULT_CATEGORIES.forEach((c, i) => (this.data.categories[c.id] = { ...c, order: i, updatedAt: t }));
+      }
+    },
+    categories() {
+      return Object.values(this.data.categories || {}).filter((c) => !c.deleted).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name));
+    },
+    category(id) { const c = (this.data.categories || {})[id]; return c && !c.deleted ? c : null; },
+    saveCategory(cat) {
+      this.data.categories[cat.id] = { ...cat, updatedAt: now() };
+      this.changed();
+    },
+    removeCategory(id) {
+      this.data.categories[id] = { id, deleted: true, updatedAt: now() };
+      Object.values(this.data.sets).forEach((s) => { if (!s.deleted && s.category === id) { s.category = ""; s.updatedAt = now(); } });
+      this.changed();
     },
     persist() { lsSet(LS.data(this.who), this.data); },
     changed() { this.persist(); Sync.schedule(); },
@@ -173,6 +204,15 @@
       else if (l.updatedAt > r.updatedAt) { out.sets[id] = l; remoteChanged = true; }
       else if (r.updatedAt > l.updatedAt) { out.sets[id] = r; localChanged = true; }
       else out.sets[id] = l;
+    }
+    const cids = new Set([...Object.keys(local.categories || {}), ...Object.keys(remote.categories || {})]);
+    for (const id of cids) {
+      const l = local.categories?.[id], r = remote.categories?.[id];
+      if (!r) { out.categories[id] = l; remoteChanged = true; }
+      else if (!l) { out.categories[id] = r; localChanged = true; }
+      else if ((l.updatedAt || 0) > (r.updatedAt || 0)) { out.categories[id] = l; remoteChanged = true; }
+      else if ((r.updatedAt || 0) > (l.updatedAt || 0)) { out.categories[id] = r; localChanged = true; }
+      else out.categories[id] = l;
     }
     const pids = new Set([...Object.keys(local.progress || {}), ...Object.keys(remote.progress || {})]);
     for (const sid of pids) {
@@ -343,6 +383,7 @@
         if (!this.fileId) { this.status("Chưa có bản sao lưu trên Drive", "err"); return false; }
         const remote = await this.download(this.fileId);
         Store.data = Object.assign(emptyData(), remote);
+        Store.ensureCategories();
         Store.persist();
         this.last = now();
         this.status("✓ Đã tải sao lưu " + new Date(this.last).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" }), "ok");
@@ -361,6 +402,7 @@
         const remote = this.fileId ? await this.download(this.fileId) : null;
         const { data, localChanged, remoteChanged } = mergeData(Store.data, remote);
         Store.data = data;
+        Store.ensureCategories();
         Store.persist();
         if (!this.fileId) this.fileId = await this.create(data);
         else if (remoteChanged) await this.update(this.fileId, data);
@@ -646,6 +688,7 @@
       createdAt: s.createdAt || now(),
       updatedAt: s.updatedAt || now(),
       lastUsed: s.lastUsed || 0,
+      category: s.category || "",
       cards: (s.cards || []).map((c) => ({
         id: c.id || uid(),
         createdAt: c.createdAt || 0,
@@ -683,43 +726,79 @@
   }
 
   /* ===================== View: Library ===================== */
+  const catDot = (cat) => cat ? `<span class="cat-chip"><span class="cat-dot" style="background:${esc(cat.color)}"></span>${esc(cat.name)}</span>` : "";
   function viewLibrary(app) {
     const sets = Store.sets();
+    const view = Object.assign({ sort: "newest", cats: [] }, lsGet("mc-lib-view", {}));
+    view.cats = view.cats.filter((id) => Store.category(id));
+    const saveView = () => lsSet("mc-lib-view", view);
+    const totals = (() => {
+      let cards = 0, known = 0;
+      for (const st of sets) { const p = Store.progress(st.id); cards += st.cards.length; known += st.cards.filter((c) => p[c.id]?.s === "know").length; }
+      return { cards, known };
+    })();
+    const SORTS = [["az", "A đến Z"], ["newest", "Mới nhất"], ["oldest", "Cũ nhất"], ["used", "Dùng gần đây"]];
     app.innerHTML = `
       <div class="page-head">
-        <h1>Bộ thẻ của bạn</h1>
+        <div>
+          <h1>Bộ thẻ của bạn</h1>
+          <div class="muted" style="font-size:14px;margin-top:4px">${sets.length} bộ · ${totals.known}/${totals.cards} thẻ đã thuộc</div>
+        </div>
         <div class="row">
-          <input class="text search" id="q" placeholder="🔍 Tìm bộ thẻ, thuật ngữ…">
           <button class="btn" id="btnImport">⬆ Nhập file (JSON / CSV)</button>
           <button class="btn primary" id="btnNew">＋ Tạo bộ mới</button>
         </div>
       </div>
+      <div class="lib-toolbar">
+        <div class="search-wrap"><span class="search-ico">🔍</span><input class="text" id="q" placeholder="Tìm bộ thẻ, thuật ngữ…"></div>
+        <div class="dd-wrap">
+          <button class="btn" id="btnFilter">▼ Lọc <span class="badge" id="filterBadge"></span></button>
+          <div class="dd" id="ddFilter"></div>
+        </div>
+        <div class="dd-wrap">
+          <button class="btn" id="btnSort">⇅ Sắp xếp <span class="badge soft" id="sortBadge"></span></button>
+          <div class="dd" id="ddSort"></div>
+        </div>
+      </div>
       <div id="list"></div>`;
-    $("#btnNew").onclick = () => { const s = Store.create(""); location.hash = `#/set/${s.id}/edit`; };
+    $("#btnNew").onclick = () => { const st = Store.create(""); if (view.cats.length === 1) st.category = view.cats[0]; location.hash = `#/set/${st.id}/edit`; };
     $("#btnImport").onclick = () => importFile(null);
-    const draw = (q = "") => {
-      const ql = q.toLowerCase();
-      const items = sets.filter((s) => !ql || (s.title + " " + s.description + " " + s.cards.map((c) => plainText(c.term) + " " + plainText(c.definition) + " " + c.tags.join(" ")).join(" ")).toLowerCase().includes(ql));
+
+    const sortFn = {
+      az: (a, b) => (a.title || "").localeCompare(b.title || "", "vi"),
+      newest: (a, b) => (b.createdAt || 0) - (a.createdAt || 0),
+      oldest: (a, b) => (a.createdAt || 0) - (b.createdAt || 0),
+      used: (a, b) => (b.lastUsed || b.updatedAt || 0) - (a.lastUsed || a.updatedAt || 0),
+    };
+    const draw = () => {
+      const ql = $("#q").value.trim().toLowerCase();
+      let items = sets.filter((st) => !ql || (st.title + " " + st.description + " " + st.cards.map((c) => plainText(c.term) + " " + plainText(c.definition) + " " + c.tags.join(" ")).join(" ")).toLowerCase().includes(ql));
+      if (view.cats.length) items = items.filter((st) => view.cats.includes(st.category));
+      items = items.slice().sort(sortFn[view.sort] || sortFn.newest);
+      $("#filterBadge").textContent = view.cats.length || "";
+      $("#sortBadge").textContent = SORTS.find((x) => x[0] === view.sort)?.[1] || "";
       const list = $("#list");
       if (!sets.length) {
         list.innerHTML = `<div class="empty"><div class="big">🃏</div><p>Chưa có bộ thẻ nào.</p>
           <p>${Auth.user ? "" : "Đăng nhập Google để đồng bộ giữa các thiết bị, hoặc "}bấm <b>＋ Tạo bộ mới</b> để bắt đầu.</p></div>`;
         return;
       }
-      if (!items.length) { list.innerHTML = `<div class="empty">Không tìm thấy kết quả.</div>`; return; }
-      list.innerHTML = `<div class="set-grid">${items.map((s) => {
-        const prog = Store.progress(s.id);
-        const total = s.cards.length;
-        const known = s.cards.filter((c) => prog[c.id]?.s === "know").length;
+      if (!items.length) { list.innerHTML = `<div class="empty">Không có bộ thẻ nào khớp bộ lọc.</div>`; return; }
+      list.innerHTML = `<div class="set-grid">${items.map((st) => {
+        const prog = Store.progress(st.id);
+        const total = st.cards.length;
+        const known = st.cards.filter((c) => prog[c.id]?.s === "know").length;
         const pct = total ? Math.round((known / total) * 100) : 0;
-        const used = s.lastUsed || s.updatedAt;
-        return `<div class="set-tile" data-id="${s.id}" role="link" tabindex="0" title="Bấm để sửa bộ thẻ">
+        const used = st.lastUsed || st.updatedAt;
+        const cat = Store.category(st.category);
+        return `<div class="set-tile" data-id="${st.id}" role="link" tabindex="0" title="Bấm để sửa bộ thẻ" ${cat ? `style="--cat:${esc(cat.color)}"` : ""}>
           <div class="tile-tools">
             <button class="tile-ico" data-act="dup" title="Nhân bản">⧉</button>
             <button class="tile-ico" data-act="exp" title="Xuất JSON">⬇</button>
             <button class="tile-ico" data-act="del" title="Xoá bộ thẻ"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9 3h6l1 1h4v2H4V4h4zM5 8h14l-1 13a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2z"/></svg></button>
           </div>
-          <h3>${esc(s.title || "(Chưa đặt tên)")}</h3>
+          ${cat ? `<div class="tile-cat">${catDot(cat)}</div>` : ""}
+          <h3>${esc(st.title || "(Chưa đặt tên)")}</h3>
           <div class="memo-row"><span class="memo-label">Cards memorized</span><b>${known}/${total}</b></div>
           <div class="memo-bar"><div style="width:${pct}%"></div></div>
           <div class="tile-sep"></div>
@@ -728,13 +807,39 @@
             <div>🕓 Last used ${new Date(used).toLocaleDateString("vi-VN")}</div>
           </div>
           <div class="actions">
-            <button class="btn small primary" data-modes="${s.id}" data-stop>▶ Học</button>
-            <a class="btn small" href="#/set/${s.id}/mode/mc" data-stop>Kiểm tra</a>
+            <button class="btn small primary" data-modes="${st.id}" data-stop>▶ Học</button>
           </div></div>`;
       }).join("")}</div>`;
     };
-    draw();
-    $("#q").oninput = (e) => draw(e.target.value.trim());
+    // Dropdown lọc theo danh mục
+    const drawFilter = () => {
+      const cats = Store.categories();
+      $("#ddFilter").innerHTML = `<div class="dd-title">Lọc theo danh mục</div>
+        ${cats.map((c) => `<label class="dd-item"><span class="cat-dot" style="background:${esc(c.color)}"></span><span style="flex:1">${esc(c.name)}</span><input type="checkbox" data-cat="${c.id}" ${view.cats.includes(c.id) ? "checked" : ""}></label>`).join("")}
+        <label class="dd-item"><span class="cat-dot" style="background:#e5e7eb"></span><span style="flex:1">Chưa phân loại</span><input type="checkbox" data-cat="" ${view.cats.includes("") ? "checked" : ""}></label>
+        <div class="dd-foot"><button type="button" class="link" id="clearCats">Bỏ lọc</button><button type="button" class="link" id="manageCats">Quản lý danh mục</button></div>`;
+      $("#ddFilter").onchange = (e) => {
+        const cb = e.target.closest("input[data-cat]"); if (!cb) return;
+        const id = cb.dataset.cat;
+        view.cats = cb.checked ? [...new Set([...view.cats, id])] : view.cats.filter((x) => x !== id);
+        saveView(); draw();
+      };
+      $("#clearCats").onclick = () => { view.cats = []; saveView(); drawFilter(); draw(); };
+      $("#manageCats").onclick = () => { closeDD(); manageCategories(() => { drawFilter(); draw(); }); };
+    };
+    const drawSort = () => {
+      $("#ddSort").innerHTML = `<div class="dd-title">Sắp xếp bộ thẻ</div>${SORTS.map(([k, l]) => `<button type="button" class="dd-item ${view.sort === k ? "on" : ""}" data-sort="${k}">${view.sort === k ? "✓ " : ""}${l}</button>`).join("")}`;
+      $("#ddSort").onclick = (e) => { const b = e.target.closest("button[data-sort]"); if (!b) return; view.sort = b.dataset.sort; saveView(); drawSort(); draw(); closeDD(); };
+    };
+    const closeDD = () => $$(".dd.open").forEach((d) => d.classList.remove("open"));
+    const toggleDD = (id) => { const d = $(id); const open = d.classList.contains("open"); closeDD(); if (!open) d.classList.add("open"); };
+    $("#btnFilter").onclick = (e) => { e.stopPropagation(); toggleDD("#ddFilter"); };
+    $("#btnSort").onclick = (e) => { e.stopPropagation(); toggleDD("#ddSort"); };
+    const outside = (e) => { if (!e.target.closest(".dd-wrap")) closeDD(); };
+    document.addEventListener("click", outside);
+    cleanup = () => document.removeEventListener("click", outside);
+    drawFilter(); drawSort(); draw();
+    $("#q").oninput = draw;
     const openSet = (tile) => { location.hash = `#/set/${tile.dataset.id}/edit`; };
     $("#list").onkeydown = (e) => { const t = e.target.closest(".set-tile"); if (t && e.target === t && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openSet(t); } };
     $("#list").onclick = async (e) => {
@@ -743,20 +848,78 @@
       const btn = e.target.closest("button[data-act]");
       if (!btn) { if (!e.target.closest("[data-stop]")) openSet(tile); return; }
       const id = tile.dataset.id;
-      const s = Store.get(id);
+      const st = Store.get(id);
       if (btn.dataset.act === "del") {
-        if (await confirmDialog(`Xoá bộ "${s.title || "(Chưa đặt tên)"}"? Thao tác sẽ đồng bộ sang các thiết bị khác.`, "Xoá", true)) {
+        if (await confirmDialog(`Xoá bộ "${st.title || "(Chưa đặt tên)"}"? Thao tác sẽ đồng bộ sang các thiết bị khác.`, "Xoá", true)) {
           Store.remove(id); toast("Đã xoá"); route();
         }
       } else if (btn.dataset.act === "dup") {
-        const copy = normalizeSet(JSON.parse(JSON.stringify(s)));
-        copy.id = uid(); copy.title = s.title + " (bản sao)"; copy.cards.forEach((c) => (c.id = uid()));
+        const copy = normalizeSet(JSON.parse(JSON.stringify(st)));
+        copy.id = uid(); copy.title = st.title + " (bản sao)"; copy.cards.forEach((c) => (c.id = uid()));
         copy.createdAt = copy.updatedAt = now();
         Store.data.sets[copy.id] = copy; Store.changed(); route();
       } else if (btn.dataset.act === "exp") {
-        exportJSON(s, (s.title || "set").replace(/[^\w\-]+/g, "_") + ".json");
+        exportJSON(st, (st.title || "set").replace(/[^\w\-]+/g, "_") + ".json");
       }
     };
+  }
+
+  /* ===================== Danh mục ===================== */
+  const colorPicker = (name, value) => `<div class="color-row" data-color-row="${name}">
+      ${CATEGORY_COLORS.map((c) => `<button type="button" class="swatch ${c === value ? "on" : ""}" style="background:${c}" data-c="${c}" title="${c}"></button>`).join("")}
+      <label class="swatch custom" title="Màu khác"><input type="color" value="${esc(value)}" data-custom></label>
+      <input type="hidden" name="${name}" value="${esc(value)}"></div>`;
+  function bindColorRow(form) {
+    $$("[data-color-row]", form).forEach((row) => {
+      const hidden = $("input[type=hidden]", row);
+      row.onclick = (e) => { const b = e.target.closest("button[data-c]"); if (!b) return; hidden.value = b.dataset.c; $$(".swatch", row).forEach((x) => x.classList.toggle("on", x === b)); };
+      $("[data-custom]", row).oninput = (e) => { hidden.value = e.target.value; $$(".swatch", row).forEach((x) => x.classList.remove("on")); e.target.parentElement.classList.add("on"); };
+    });
+  }
+  // Thêm / sửa một danh mục. Trả Promise<cat|null>
+  function editCategory(cat = null) {
+    const color = cat?.color || CATEGORY_COLORS[Store.categories().length % CATEGORY_COLORS.length];
+    return openDialogWithColors(
+      `<h2>${cat ? "Sửa danh mục" : "Thêm danh mục"}</h2>
+      <label class="field-label">Tên danh mục</label>
+      <input class="text" name="name" placeholder="Ví dụ: Sinh vật" value="${esc(cat?.name || "")}" maxlength="40">
+      <label class="field-label">Màu</label>
+      ${colorPicker("color", color)}
+      <div class="actions"><button class="btn" value="cancel">Huỷ</button><button class="btn primary" value="ok">Lưu</button></div>`,
+      (form) => {
+        const name = form.name.value.trim();
+        if (!name) { toast("Nhập tên danh mục"); return false; }
+        const c = { id: cat?.id || "cat-" + uid(), name, color: form.color.value, order: cat?.order ?? Store.categories().length };
+        Store.saveCategory(c);
+        return c;
+      }
+    ).then((v) => (v && v.id ? v : null));
+  }
+  // openDialog vẽ xong là gắn bảng màu ngay
+  function openDialogWithColors(html, onSubmit) { const p = openDialog(html, onSubmit); bindColorRow($("#dialogForm")); return p; }
+  function manageCategories(onDone) {
+    const draw = () => {
+      const cats = Store.categories();
+      openDialog(
+        `<h2>Quản lý danh mục</h2>
+        <div class="cat-list">${cats.map((c) => `<div class="cat-row" data-id="${c.id}">
+            <span class="cat-dot big" style="background:${esc(c.color)}"></span><span style="flex:1">${esc(c.name)}</span>
+            <span class="muted" style="font-size:13px">${Store.sets().filter((st) => st.category === c.id).length} bộ</span>
+            <button type="button" class="icon-btn" data-edit title="Sửa">✎</button><button type="button" class="icon-btn" data-del title="Xoá">✕</button></div>`).join("") || `<p class="muted">Chưa có danh mục nào.</p>`}</div>
+        <div class="actions" style="justify-content:space-between"><button class="btn" value="add">＋ Thêm danh mục</button><button class="btn primary" value="cancel">Xong</button></div>`,
+        (form, action) => { if (action === "add") { setTimeout(() => editCategory().then(draw), 30); return true; } }
+      ).then((v) => { if (v === null) onDone && onDone(); });
+      $(".cat-list").onclick = async (e) => {
+        const row = e.target.closest(".cat-row"); if (!row) return;
+        const c = Store.category(row.dataset.id);
+        if (e.target.closest("[data-edit]")) { $("#dialog").close(); setTimeout(() => editCategory(c).then(draw), 30); }
+        if (e.target.closest("[data-del]")) {
+          $("#dialog").close();
+          setTimeout(async () => { if (await confirmDialog(`Xoá danh mục "${c.name}"? Các bộ thẻ thuộc danh mục này sẽ thành "Chưa phân loại".`, "Xoá", true)) Store.removeCategory(c.id); draw(); }, 30);
+        }
+      };
+    };
+    draw();
   }
 
   /* ===================== Rich text editor ===================== */
@@ -927,6 +1090,7 @@
           <h1 class="set-title">${esc(set.title || "Bộ thẻ chưa đặt tên")}</h1>
           <div class="row" style="margin-top:8px">
             <span class="chip">${n} ${n === 1 ? "card" : "cards"}</span>
+            ${Store.category(set.category) ? catDot(Store.category(set.category)) : ""}
             ${set.description ? `<span class="muted" style="font-size:14px">${esc(set.description)}</span>` : ""}
           </div>
         </div>
@@ -1073,20 +1237,37 @@
   }
 
   function editDetails(set, onDone) {
-    openDialog(
-      `<h2>Chi tiết bộ thẻ</h2>
-      <label class="field-label">Tên bộ thẻ</label>
-      <input class="text" name="title" placeholder="Ví dụ: IELTS Vocabulary – Unit 1" value="${esc(set.title)}">
-      <label class="field-label">Mô tả (tuỳ chọn)</label>
-      <textarea class="text" name="desc" rows="3">${esc(set.description)}</textarea>
-      <div class="actions"><button class="btn" value="cancel">Huỷ</button><button class="btn primary" value="ok">Lưu</button></div>`,
-      (form) => {
-        set.title = form.title.value.trim();
-        set.description = form.desc.value.trim();
-        Store.touch(set);
-        onDone();
-      }
-    );
+    const draw = () => {
+      const cats = Store.categories();
+      openDialog(
+        `<h2>Chi tiết bộ thẻ</h2>
+        <label class="field-label">Tên bộ thẻ</label>
+        <input class="text" name="title" placeholder="Ví dụ: IELTS Vocabulary – Unit 1" value="${esc(set.title)}">
+        <label class="field-label">Danh mục</label>
+        <div class="row">
+          <select class="text" name="category" style="flex:1">
+            <option value="">— Chưa phân loại —</option>
+            ${cats.map((c) => `<option value="${c.id}" ${set.category === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
+          </select>
+          <span class="cat-dot big" id="catPreview" style="background:${esc(Store.category(set.category)?.color || "#e5e7eb")}"></span>
+          <button class="btn" value="addcat" type="submit">＋ Thêm</button>
+        </div>
+        <label class="field-label">Mô tả (tuỳ chọn)</label>
+        <textarea class="text" name="desc" rows="3">${esc(set.description)}</textarea>
+        <div class="actions"><button class="btn" value="cancel">Huỷ</button><button class="btn primary" value="ok">Lưu</button></div>`,
+        (form, action) => {
+          set.title = form.title.value.trim();
+          set.description = form.desc.value.trim();
+          set.category = form.category.value;
+          Store.touch(set);
+          if (action === "addcat") { setTimeout(() => editCategory().then((c) => { if (c) set.category = c.id; draw(); }), 30); return true; }
+          onDone();
+        }
+      );
+      const form = $("#dialogForm");
+      form.category.onchange = () => { $("#catPreview", form).style.background = Store.category(form.category.value)?.color || "#e5e7eb"; };
+    };
+    draw();
   }
 
   function buildCardEditor(set, card, save, onDelete) {
@@ -1506,12 +1687,41 @@
     draw();
   }
 
+  /* ===================== Màu nền ===================== */
+  const BG_PRESETS = [
+    ["Mặc định", "#f6f7fb"], ["Trắng", "#ffffff"], ["Kem", "#fdf6e3"], ["Vàng nhạt", "#fef9c3"], ["Hồng nhạt", "#fce7f3"],
+    ["Xanh nhạt", "#e0f2fe"], ["Xanh lá nhạt", "#dcfce7"], ["Tím nhạt", "#ede9fe"], ["Xám", "#e5e7eb"], ["Tối", "#1f2430"],
+  ];
+  function applyTheme(t) {
+    const bg = t.bg || "#f6f7fb";
+    document.documentElement.style.setProperty("--bg", bg);
+    // nền tối → đổi màu chữ / panel cho dễ đọc
+    const dark = (() => { const m = bg.match(/^#([0-9a-f]{6})$/i); if (!m) return false; const v = parseInt(m[1], 16); const r = v >> 16, g = (v >> 8) & 255, b = v & 255; return (r * 299 + g * 587 + b * 114) / 1000 < 128; })();
+    document.body.classList.toggle("dark", dark);
+  }
+  function openThemeDialog() {
+    const cur = lsGet("mc-theme", {});
+    openDialog(
+      `<h2>🎨 Màu nền</h2>
+      <div class="bg-grid">${BG_PRESETS.map(([n, c]) => `<button type="button" class="bg-swatch ${cur.bg === c || (!cur.bg && c === "#f6f7fb") ? "on" : ""}" data-bg="${c}" style="background:${c}"><span>${n}</span></button>`).join("")}</div>
+      <label class="row" style="margin-top:6px">Màu khác: <input type="color" id="bgCustom" value="${esc(cur.bg || "#f6f7fb")}"></label>
+      <div class="actions"><button class="btn" value="reset">Mặc định</button><button class="btn primary" value="cancel">Xong</button></div>`,
+      (form, action) => { if (action === "reset") { lsSet("mc-theme", {}); applyTheme({}); return false; } }
+    );
+    const form = $("#dialogForm");
+    const pick = (bg) => { lsSet("mc-theme", { bg }); applyTheme({ bg }); $$(".bg-swatch", form).forEach((b) => b.classList.toggle("on", b.dataset.bg === bg)); };
+    form.onclick = (e) => { const b = e.target.closest(".bg-swatch"); if (b) pick(b.dataset.bg); };
+    $("#bgCustom", form).oninput = (e) => pick(e.target.value);
+  }
+
   /* ===================== Boot ===================== */
   function boot() {
     Auth.init();
     Store.load(Auth.user?.email || null);
     renderAuth();
     $("#btnSettings").onclick = () => openSettings(false);
+    applyTheme(lsGet("mc-theme", {}));
+    $("#btnTheme").onclick = openThemeDialog;
     $("#syncStatus").onclick = () => { if (Auth.user && !Auth.valid()) Auth.login(); else Sync.now(); };
     $("#syncStatus").style.cursor = "pointer";
     window.addEventListener("hashchange", route);

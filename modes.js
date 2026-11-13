@@ -52,9 +52,12 @@
     { id: "mc", icon: "☑", name: "Multiple Choice", desc: "Trả lời trắc nghiệm để kiểm tra nhanh." },
     { id: "writing", icon: "✎", name: "Writing", desc: "Gõ câu trả lời để nhớ lâu hơn." },
     { id: "match", icon: "☰", name: "Match List", desc: "Ghép thuật ngữ với định nghĩa trong danh sách." },
-    { id: "drawing", icon: "🖌", name: "Drawing", desc: "Vẽ câu trả lời — hợp với kanji, hangul, tiếng Ả Rập, công thức." },
     { id: "audio", icon: "🎧", name: "Audio Review", desc: "Nghe thuật ngữ rồi mở đáp án — luyện không cần nhìn." },
-    { id: "custom", icon: "📋", name: "Custom Quiz", desc: "Tự tạo bài kiểm tra với hẹn giờ và nhiều dạng câu hỏi." },
+  ];
+  // Các chế độ ẩn khỏi danh sách nhưng vẫn mở được qua đường dẫn #/set/:id/mode/:name
+  const HIDDEN = [
+    { id: "drawing", icon: "🖌", name: "Drawing", desc: "" },
+    { id: "custom", icon: "📋", name: "Custom Quiz", desc: "" },
   ];
   const GAME = [
     { id: "salad", icon: "A", name: "Word Salad", desc: "Sắp xếp lại các chữ cái bị xáo trộn thành thuật ngữ đúng." },
@@ -62,7 +65,7 @@
     { id: "ring", icon: "🔤", name: "Alphabet Ring", desc: "Đoán thuật ngữ theo chữ cái đầu và gợi ý." },
     { id: "attack", icon: "⏱", name: "Time Attack", desc: "Đua với đồng hồ: ghép càng nhiều thuật ngữ – định nghĩa càng tốt." },
   ];
-  const ALL = [...STUDY, ...GAME];
+  const ALL = [...STUDY, ...GAME, ...HIDDEN];
 
   /* ===================== Zen mode ===================== */
   const zenOn = () => !!lsGet("mc-zen", false);
@@ -529,14 +532,18 @@
   MODES.audio = (ctx) => {
     if (!window.speechSynthesis) return empty(ctx, "Trình duyệt này không hỗ trợ đọc văn bản (Web Speech).");
     let i = 0, score = 0; const wrong = [];
+    const LANGS = [["vi-VN", "Tiếng Việt"], ["en-US", "English (US)"], ["en-GB", "English (UK)"]];
     let lang = lsGet("mc-tts-lang", "en-US");
+    if (!LANGS.some((l) => l[0] === lang)) lang = "en-US";
+    let side = lsGet("mc-tts-side", "term"); // đọc mặt nào: term | definition
     const voices = () => speechSynthesis.getVoices();
-    const langs = () => [...new Set(voices().map((v) => v.lang))].sort();
+    const voiceFor = (l) => voices().find((x) => x.lang.replace("_", "-").toLowerCase() === l.toLowerCase()) || voices().find((x) => x.lang.toLowerCase().startsWith(l.split("-")[0]));
+    const readText = (c) => (side === "definition" ? answerOf(c) : termText(c)).replace(/^[a-z. /()]+\|\s*/i, "");
     const speak = (text) => {
       speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
       u.lang = lang;
-      const v = voices().find((x) => x.lang === lang) || voices().find((x) => x.lang.startsWith(lang.split("-")[0]));
+      const v = voiceFor(lang);
       if (v) u.voice = v;
       u.rate = 0.9;
       speechSynthesis.speak(u);
@@ -545,27 +552,32 @@
       if (i >= ctx.cards.length) return result(ctx, { score, total: ctx.cards.length, label: "thẻ tự chấm đúng", wrong });
       const c = ctx.cards[i];
       ctx.bar(i, ctx.cards.length);
-      const ls = langs();
+      const noVi = lang === "vi-VN" && voices().length && !voiceFor("vi-VN");
       ctx.stage.innerHTML = `<div class="quiz-q" style="text-align:center">
         <div class="row" style="justify-content:space-between"><span class="muted" style="font-size:13px">Thẻ ${i + 1}/${ctx.cards.length}</span>
-          <label class="row" style="font-size:13px">Giọng đọc <select class="text" id="lang" style="width:auto;padding:4px 8px">${(ls.length ? ls : [lang]).map((l) => `<option ${l === lang ? "selected" : ""}>${l}</option>`).join("")}</select></label></div>
+          <span class="row" style="font-size:13px">
+            <label class="row">Đọc <select class="text" id="side" style="width:auto;padding:4px 8px"><option value="term" ${side === "term" ? "selected" : ""}>Term</option><option value="definition" ${side === "definition" ? "selected" : ""}>Definition</option></select></label>
+            <label class="row">Giọng <select class="text" id="lang" style="width:auto;padding:4px 8px">${LANGS.map(([v, n]) => `<option value="${v}" ${v === lang ? "selected" : ""}>${n}</option>`).join("")}</select></label>
+          </span></div>
+        ${noVi ? `<div class="muted" style="font-size:13px;margin-top:6px">⚠ Máy này chưa cài giọng đọc tiếng Việt (Windows: Settings → Time &amp; language → Speech → Add voices → Tiếng Việt). Tạm dùng giọng mặc định.</div>` : ""}
         <div style="font-size:64px;margin:24px 0 10px">🎧</div>
         <button class="btn primary" id="play">🔊 Nghe lại <small>(Space)</small></button>
         <div class="muted" style="font-size:13px;margin:8px 0 16px">Nghe thuật ngữ, nhớ câu trả lời rồi mở đáp án.</div>
         <button class="btn" id="reveal">Hiện đáp án <small>(Enter)</small></button>
         <div id="after" style="text-align:left"></div></div>`;
-      $("#lang").onchange = (e) => { lang = e.target.value; lsSet("mc-tts-lang", lang); speak(termText(c)); };
-      $("#play").onclick = () => speak(termText(c));
+      $("#lang").onchange = (e) => { lang = e.target.value; lsSet("mc-tts-lang", lang); show(); };
+      $("#side").onchange = (e) => { side = e.target.value; lsSet("mc-tts-side", side); show(); };
+      $("#play").onclick = () => speak(readText(c));
       $("#reveal").onclick = () => {
         $("#reveal").disabled = true;
         $("#after").innerHTML = `<div class="fb ok" style="margin-top:12px"><div class="rich" style="font-size:20px"><b>${M.renderRich(c.term)}</b></div><div class="rich" style="font-size:20px;margin-top:6px">${answerHtml(c)}</div>
           <div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn learning" id="no">✗ Chưa thuộc <small>(1)</small></button><button class="btn know" id="yes">✓ Đã thuộc <small>(2)</small></button></div></div>`;
         const grade = (ok) => { ctx.mark(c, ok); if (ok) score++; else wrong.push(c); i++; show(); };
         $("#yes").onclick = () => grade(true); $("#no").onclick = () => grade(false);
-        ctx.onKey = (e) => { if (e.key === "2") grade(true); else if (e.key === "1") grade(false); else if (e.code === "Space") { e.preventDefault(); speak(termText(c)); } };
+        ctx.onKey = (e) => { if (e.key === "2") grade(true); else if (e.key === "1") grade(false); else if (e.code === "Space") { e.preventDefault(); speak(readText(c)); } };
       };
-      ctx.onKey = (e) => { if (e.key === "Enter") $("#reveal").click(); else if (e.code === "Space") { e.preventDefault(); speak(termText(c)); } };
-      ctx.after(() => speak(termText(c)), 300);
+      ctx.onKey = (e) => { if (e.key === "Enter") $("#reveal").click(); else if (e.code === "Space") { e.preventDefault(); speak(readText(c)); } };
+      ctx.after(() => speak(readText(c)), 300);
     };
     if (!voices().length) speechSynthesis.onvoiceschanged = () => { if (i === 0) show(); };
     show();
