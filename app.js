@@ -368,6 +368,7 @@
         Store.persist();
         if (!this.fileId) this.fileId = await this.create(Store.data);
         else await this.update(this.fileId, Store.data);
+        try { await this.syncBg(true); } catch (e) { console.warn("bg sync", e); }
         this.last = now();
         this.status("✓ Đã sao lưu " + new Date(this.last).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" }), "ok");
       } catch (e) { this.status("⚠ Sao lưu thất bại", "err"); throw e; }
@@ -385,11 +386,60 @@
         Store.data = Object.assign(emptyData(), remote);
         Store.ensureCategories();
         Store.persist();
+        try { await this.syncBg(true); } catch (e) { console.warn("bg sync", e); }
         this.last = now();
         this.status("✓ Đã tải sao lưu " + new Date(this.last).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" }), "ok");
         return true;
       } catch (e) { this.status("⚠ Tải sao lưu thất bại", "err"); throw e; }
       finally { this.busy = false; }
+    },
+    /* ---- Ảnh nền: lưu thành file riêng trong appDataFolder, đồng bộ theo mốc thời gian ---- */
+    BG_NAME: "meocards-bg.txt",
+    async findBg() {
+      const q = encodeURIComponent(`name='${this.BG_NAME}' and trashed=false`);
+      const r = await this.api(`${DRIVE}?spaces=appDataFolder&q=${q}&fields=files(id,modifiedTime)&orderBy=modifiedTime desc`);
+      const f = (await r.json()).files?.[0];
+      return f ? { id: f.id, time: Date.parse(f.modifiedTime) } : null;
+    },
+    async uploadBg(existing, dataUrl) {
+      let r;
+      if (existing) {
+        r = await this.api(`${UPLOAD}/${existing.id}?uploadType=media&fields=id,modifiedTime`, { method: "PATCH", headers: { "Content-Type": "text/plain" }, body: dataUrl });
+      } else {
+        const boundary = "mcb" + uid();
+        const meta = { name: this.BG_NAME, parents: ["appDataFolder"], mimeType: "text/plain" };
+        const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: text/plain\r\n\r\n${dataUrl}\r\n--${boundary}--`;
+        r = await this.api(`${UPLOAD}?uploadType=multipart&fields=id,modifiedTime`, { method: "POST", headers: { "Content-Type": `multipart/related; boundary=${boundary}` }, body });
+      }
+      const j = await r.json();
+      return Date.parse(j.modifiedTime) || now();
+    },
+    // Quy tắc: bên nào đổi sau cùng thì thắng (mốc thời gian local = lúc chọn/bỏ ảnh, remote = modifiedTime trên Drive)
+    async syncBg(force = false) {
+      const localImg = lsGet("mc-theme-img", "");
+      const localTs = lsGet("mc-theme-img-ts", 0);
+      const syncedTs = lsGet("mc-theme-img-synced", 0);
+      const remote = await this.findBg();
+      const remoteTs = remote ? remote.time : 0;
+      if (!force && localTs <= syncedTs && remoteTs <= syncedTs) return; // không có gì mới
+      if (remoteTs > localTs) {
+        // Drive mới hơn → tải về
+        const r = await this.api(`${DRIVE}/${remote.id}?alt=media`);
+        const data = await r.text();
+        if (data.startsWith("data:image")) { try { localStorage.setItem("mc-theme-img", JSON.stringify(data)); } catch { return; } }
+        lsSet("mc-theme-img-ts", remoteTs); lsSet("mc-theme-img-synced", remoteTs);
+        applyTheme(lsGet("mc-theme", {}));
+      } else if (localImg && localTs > remoteTs) {
+        // Máy này mới hơn → đẩy lên
+        const t = await this.uploadBg(remote, localImg);
+        lsSet("mc-theme-img-ts", t); lsSet("mc-theme-img-synced", t);
+      } else if (!localImg && remote && localTs > remoteTs) {
+        // Đã bỏ ảnh trên máy này → xoá trên Drive
+        await this.api(`${DRIVE}/${remote.id}`, { method: "DELETE" });
+        lsSet("mc-theme-img-synced", localTs);
+      } else {
+        lsSet("mc-theme-img-synced", Math.max(localTs, remoteTs));
+      }
     },
     async now() {
       if (!Auth.user) return;
@@ -406,6 +456,7 @@
         Store.persist();
         if (!this.fileId) this.fileId = await this.create(data);
         else if (remoteChanged) await this.update(this.fileId, data);
+        try { await this.syncBg(); } catch (e) { console.warn("bg sync", e); }
         this.last = now();
         this.status("✓ Đã đồng bộ " + new Date(this.last).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" }), "ok");
         if (localChanged) refreshAfterSync();
@@ -1711,6 +1762,7 @@
     }
   }
   // Ảnh nền: thu nhỏ còn tối đa 1600px, nén JPEG rồi lưu trên máy (không đồng bộ lên Drive vì dung lượng)
+  function bgChanged() { lsSet("mc-theme-img-ts", now()); if (Auth.user) Sync.schedule(); }
   function pickBgImage(onDone) {
     const inp = document.createElement("input");
     inp.type = "file"; inp.accept = "image/*";
@@ -1724,6 +1776,7 @@
         let q = 0.82, data = cv.toDataURL("image/jpeg", q);
         while (data.length > 2_500_000 && q > 0.4) { q -= 0.1; data = cv.toDataURL("image/jpeg", q); }
         try { localStorage.setItem("mc-theme-img", JSON.stringify(data)); } catch { toast("Ảnh quá lớn, hãy chọn ảnh nhỏ hơn"); return; }
+        bgChanged();
         URL.revokeObjectURL(img.src);
         onDone(data);
       };
@@ -1746,12 +1799,12 @@
         ${hasImg ? `<button class="btn" value="noimg" type="submit">✕ Bỏ ảnh</button>` : ""}
       </div>
       <div class="row" id="dimRow" ${hasImg ? "" : 'style="display:none"'}><span style="font-size:14px">Làm mờ ảnh (phủ màu nền):</span><input type="range" id="dim" min="0" max="90" value="${cur.dim ?? 40}" style="flex:1"><b id="dimVal">${cur.dim ?? 40}%</b></div>
-      <small class="muted">Ảnh chỉ lưu trên thiết bị này, không đồng bộ lên Drive.</small>
+      <small class="muted">${Auth.user ? "Ảnh được đồng bộ lên Google Drive theo tài khoản của bạn." : "Chưa đăng nhập: ảnh chỉ lưu trên thiết bị này."}</small>
       <div class="actions"><button class="btn" value="reset">Mặc định</button><button class="btn primary" value="cancel">Xong</button></div>`,
       (form, action) => {
-        if (action === "reset") { lsSet("mc-theme", {}); lsDel("mc-theme-img"); applyTheme({}); setTimeout(openThemeDialog, 30); return true; }
+        if (action === "reset") { lsSet("mc-theme", {}); if (lsGet("mc-theme-img", "")) { lsDel("mc-theme-img"); bgChanged(); } applyTheme({}); setTimeout(openThemeDialog, 30); return true; }
         if (action === "img") { setTimeout(() => pickBgImage(() => { applyTheme(lsGet("mc-theme", {})); openThemeDialog(); }), 30); return true; }
-        if (action === "noimg") { lsDel("mc-theme-img"); applyTheme(lsGet("mc-theme", {})); setTimeout(openThemeDialog, 30); return true; }
+        if (action === "noimg") { lsDel("mc-theme-img"); bgChanged(); applyTheme(lsGet("mc-theme", {})); setTimeout(openThemeDialog, 30); return true; }
       }
     );
     const form = $("#dialogForm");
