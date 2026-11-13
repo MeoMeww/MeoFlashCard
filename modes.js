@@ -145,21 +145,22 @@
     app.classList.add("mode-wide");
     const cards = shuffle(set.cards.filter(usable).filter(filter));
     app.innerHTML = `
-      <div class="study-bar">
-        <div><a href="#/">← Thư viện</a> · <b>${esc(set.title || "(Chưa đặt tên)")}</b> · ${mode.icon} ${mode.name}</div>
-        <div class="row">
-          <button class="btn small" data-modes="${set.id}">☰ Chế độ</button>
-          <a class="btn small" href="#/set/${set.id}/edit">Sửa</a>
-          ${zenOn() ? `<button class="btn small" id="btnZenOff" title="Thoát Zen mode">⛶</button>` : ""}
+      <div class="mode-head">
+        <a class="back-btn" href="#/" title="Về thư viện">←</a>
+        <div class="mode-head-title"><div class="mode-name">${mode.icon} ${mode.name}</div><div class="mode-set">${esc(set.title || "(Chưa đặt tên)")}</div></div>
+        <div class="mode-head-right">
+          <div class="mode-progress"><div id="barText">${cards.length} cards</div><div class="progress"><div id="bar"></div></div></div>
+          <a class="icon-btn" href="#/set/${set.id}/edit" title="Sửa bộ thẻ">✎</a>
+          ${zenOn() ? `<button class="icon-btn" id="btnZenOff" title="Thoát Zen mode">⛶</button>` : ""}
+          <button class="icon-btn" data-modes="${set.id}" title="Đổi chế độ">⚙</button>
         </div>
       </div>
-      <div class="progress"><div id="bar"></div></div>
       <div id="stage"></div>`;
     if ($("#btnZenOff")) $("#btnZenOff").onclick = () => { applyZen(false); open(app, set, id); };
     const ctx = {
       set, cards, mode, app,
       stage: $("#stage"),
-      bar: (i, n) => { $("#bar").style.width = (n ? (i / n) * 100 : 0) + "%"; },
+      bar: (i, n) => { const b = $("#bar"), t = $("#barText"); if (b) b.style.width = (n ? (i / n) * 100 : 0) + "%"; if (t) t.textContent = n ? `${Math.min(i + 1, n)} / ${n} cards` : ""; },
       mark: (c, ok) => mark(set, c, ok),
       restart: () => open(app, set, id),
       timers: [],
@@ -170,7 +171,7 @@
     const keyHandler = (e) => {
       if (!ctx.onKey) return;
       // chặn hành vi mặc định của Enter (bấm nút đang focus) để không "nhảy 2 bước" trong cùng một lần bấm
-      if (e.key === "Enter" && !e.target.closest("textarea")) e.preventDefault();
+      if (e.key === "Enter" && !(e.shiftKey && e.target.closest("textarea"))) e.preventDefault();
       ctx.onKey(e);
     };
     document.addEventListener("keydown", keyHandler);
@@ -303,12 +304,17 @@
     const iv = ctx.every(() => { left--; draw(); if (left <= 0) { clearInterval(iv); onExpire(); } }, 1000);
     return () => clearInterval(iv);
   }
+  // Khung 2 cột kiểu Flashcards World: trái = thẻ câu hỏi, phải = phần trả lời
+  const twoCol = (c, side, label = "Question · Term") => `<div class="w2 quiz-q">
+      <div class="w2-card"><div class="w2-label">${label}</div><div class="prompt rich">${promptHtml(c)}</div></div>
+      <div class="w2-side">${side}<div id="after"></div></div></div>`;
   function qWriting(ctx, el, c, opts = {}) {
     return new Promise((resolve) => {
-      el.innerHTML = `<div class="quiz-q"><div class="muted" style="font-size:13px;margin-bottom:8px">Gõ câu trả lời</div>
-        <div class="prompt rich">${promptHtml(c)}</div>
-        <div class="row"><input class="text" id="ans" placeholder="Câu trả lời…" autocomplete="off" style="flex:1"><button class="btn primary" id="chk">Kiểm tra</button><button class="btn" id="giveup">Không biết</button></div>
-        <div id="after"></div></div>`;
+      el.innerHTML = twoCol(c, `<div class="w2-title">Your answer:</div>
+        <textarea class="text w2-input" id="ans" rows="3" placeholder="Type your answer here..." autocomplete="off"></textarea>
+        <button class="btn primary w2-submit" id="chk">Submit →</button>
+        <button class="btn w2-giveup" id="giveup">Không biết — hiện đáp án</button>
+        <div class="hint">Enter để kiểm tra · Shift + Enter xuống dòng</div>`);
       const inp = $("#ans", el); inp.focus();
       let done = false;
       const finish = (ok, note) => {
@@ -317,10 +323,10 @@
         $("#after", el).innerHTML = feedback(ok, c, note);
         bindNext(ctx, () => resolve(ok));
       };
-      const stop = withTimer(ctx, $(".quiz-q", el), opts.timeLimit, () => finish(false, "(hết giờ)"));
+      const stop = withTimer(ctx, $(".w2-side", el), opts.timeLimit, () => finish(false, "(hết giờ)"));
       $("#chk", el).onclick = () => finish(sameAnswer(inp.value, answerOf(c)), inp.value.trim() ? `Bạn trả lời: <i>${esc(inp.value.trim())}</i>` : "");
       $("#giveup", el).onclick = () => finish(false);
-      ctx.onKey = (e) => { if (e.key === "Enter" && !done) { e.preventDefault(); $("#chk", el).click(); } };
+      ctx.onKey = (e) => { if (e.key === "Enter" && !e.shiftKey && !done) { e.preventDefault(); $("#chk", el).click(); } };
     });
   }
   function mcOptions(ctx, c) {
@@ -346,10 +352,8 @@
     return new Promise((resolve) => {
       const options = opts.options || mcOptions(ctx, c);
       if (!options) return qWriting(ctx, el, c, opts).then(resolve);
-      el.innerHTML = `<div class="quiz-q"><div class="muted" style="font-size:13px;margin-bottom:8px">Chọn đáp án đúng</div>
-        <div class="prompt rich">${promptHtml(c)}</div>
-        <div class="quiz-options">${options.map((o, k) => `<button class="quiz-opt rich" data-k="${k}"><b>${k + 1}.</b> ${o.html}</button>`).join("")}</div>
-        <div id="after"></div></div>`;
+      el.innerHTML = twoCol(c, `<div class="w2-title">Chọn đáp án đúng:</div>
+        <div class="quiz-options">${options.map((o, k) => `<button class="quiz-opt rich" data-k="${k}"><b>${k + 1}.</b> ${o.html}</button>`).join("")}</div>`);
       let done = false;
       const finish = (k, note) => {
         if (done) return; done = true; stop();
@@ -358,7 +362,7 @@
         $("#after", el).innerHTML = feedback(ok, c, note);
         bindNext(ctx, () => resolve(ok));
       };
-      const stop = withTimer(ctx, $(".quiz-q", el), opts.timeLimit, () => finish(-1, "(hết giờ)"));
+      const stop = withTimer(ctx, $(".w2-side", el), opts.timeLimit, () => finish(-1, "(hết giờ)"));
       $$(".quiz-opt", el).forEach((b) => (b.onclick = () => finish(+b.dataset.k)));
       ctx.onKey = (e) => { const n = parseInt(e.key, 10); if (!done && n >= 1 && n <= options.length) finish(n - 1); };
     });
@@ -368,11 +372,9 @@
       const pool = ctx.set.cards.filter((o) => o !== c && usable(o) && hasAnswer(o) && norm(answerOf(o)) !== norm(answerOf(c)));
       const truth = !pool.length || Math.random() < 0.5;
       const shown = truth ? c : pool[Math.floor(Math.random() * pool.length)];
-      el.innerHTML = `<div class="quiz-q"><div class="muted" style="font-size:13px;margin-bottom:8px">Đúng hay sai?</div>
-        <div class="prompt rich">${promptHtml(c)}</div>
+      el.innerHTML = twoCol(c, `<div class="w2-title">Đúng hay sai?</div>
         <div class="tf-def rich">= ${answerHtml(shown)}</div>
-        <div class="row" style="margin-top:14px"><button class="btn primary" id="tfT" style="flex:1;justify-content:center">✓ Đúng <small>(1)</small></button><button class="btn" id="tfF" style="flex:1;justify-content:center">✗ Sai <small>(2)</small></button></div>
-        <div id="after"></div></div>`;
+        <div class="row" style="margin-top:14px"><button class="btn primary" id="tfT" style="flex:1;justify-content:center">✓ Đúng <small>(1)</small></button><button class="btn" id="tfF" style="flex:1;justify-content:center">✗ Sai <small>(2)</small></button></div>`);
       let done = false;
       const finish = (ans, note) => {
         if (done) return; done = true; stop();
@@ -381,7 +383,7 @@
         $("#after", el).innerHTML = feedback(ok, c, note || (truth ? "" : "Định nghĩa đó thuộc thẻ khác."));
         bindNext(ctx, () => resolve(ok));
       };
-      const stop = withTimer(ctx, $(".quiz-q", el), opts.timeLimit, () => finish(null, "(hết giờ)"));
+      const stop = withTimer(ctx, $(".w2-side", el), opts.timeLimit, () => finish(null, "(hết giờ)"));
       $("#tfT", el).onclick = () => finish(true);
       $("#tfF", el).onclick = () => finish(false);
       ctx.onKey = (e) => { if (done) return; if (e.key === "1") finish(true); if (e.key === "2") finish(false); };
@@ -395,7 +397,7 @@
       ctx.bar(i, list.length);
       const { card, type } = list[i];
       const el = document.createElement("div");
-      ctx.stage.innerHTML = `<div class="muted" style="font-size:13px;margin-bottom:8px">Câu ${i + 1}/${list.length}</div>`;
+      ctx.stage.innerHTML = "";
       ctx.stage.append(el);
       const fn = type === "mc" ? qMC : type === "tf" ? qTrueFalse : qWriting;
       const ok = await fn(ctx, el, card, opts);
