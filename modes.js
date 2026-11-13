@@ -241,14 +241,36 @@
     if (res) { ipaCache[key] = res; saveIpaCache(); }
     return res;
   }
+  // Từ điển thường không có phiên âm cho dạng số nhiều / chia động từ → thử dạng gốc
+  const baseForms = (w) => {
+    const out = [];
+    const l = w.toLowerCase();
+    if (/ies$/.test(l)) out.push(l.replace(/ies$/, "y"));
+    if (/(ches|shes|xes|sses|zes)$/.test(l)) out.push(l.replace(/es$/, ""));
+    if (/es$/.test(l)) out.push(l.replace(/es$/, "e"), l.replace(/es$/, ""));
+    if (/s$/.test(l) && !/ss$/.test(l)) out.push(l.replace(/s$/, ""));
+    if (/ing$/.test(l)) out.push(l.replace(/ing$/, ""), l.replace(/ing$/, "e"));
+    if (/ed$/.test(l)) out.push(l.replace(/ed$/, ""), l.replace(/d$/, ""));
+    return [...new Set(out)].filter((x) => x.length >= 3 && x !== l);
+  };
+  async function lookupWithBase(w) {
+    const r = await lookupWord(w);
+    if (r && r.text) return r;
+    for (const b of baseForms(w)) {
+      const rb = await lookupWord(b);
+      if (rb && rb.text) return { text: rb.text, audio: rb.audio, note: `(gốc: ${b})` };
+    }
+    return r;
+  }
   async function getIPA(phrase) {
+    const words = phrase.split(/\s+/).filter(Boolean);
+    if (words.length === 1) return lookupWithBase(phrase);
     const whole = await lookupWord(phrase);
     if (whole && whole.text) return whole;
-    const words = phrase.split(/\s+/).filter(Boolean);
-    if (words.length < 2 || words.length > 5) return whole;
-    const parts = await Promise.all(words.map(lookupWord));
+    if (words.length > 5) return whole;
+    const parts = await Promise.all(words.map(lookupWithBase));
     if (parts.some((p) => !p || !p.text)) return whole;
-    return { text: parts.map((p) => p.text.replace(/^\/|\/$/g, "")).join(" ").replace(/^/, "/").replace(/$/, "/"), audio: "" };
+    return { text: "/" + parts.map((p) => p.text.replace(/^\/|\/$/g, "")).join(" ") + "/", audio: "", note: parts.some((p) => p.note) ? "(ghép từng từ)" : "" };
   }
   async function fillIPA(c) {
     const box = document.getElementById("ipaBox");
@@ -259,10 +281,10 @@
     const r = await getIPA(word);
     const el = document.getElementById("ipaBox");
     if (!el || el !== box) return;
-    if (!r || !r.text) { box.innerHTML = ""; return; }
-    box.innerHTML = `<span class="ipa-word">${esc(word)}</span> <span class="ipa-text">${esc(r.text)}</span> <button type="button" class="btn small" id="ipaPlay" title="Nghe phát âm">🔊</button>`;
+    // không có phiên âm → vẫn cho nút nghe (giọng máy)
+    box.innerHTML = `<span class="ipa-word">${esc(word)}</span> ${r && r.text ? `<span class="ipa-text">${esc(r.text)}</span>` : ""} ${r && r.note ? `<span class="muted" style="font-size:13px">${esc(r.note)}</span>` : ""} <button type="button" class="btn small" id="ipaPlay" title="Nghe phát âm">🔊 Nghe</button>`;
     document.getElementById("ipaPlay").onclick = () => {
-      if (r.audio) { new Audio(r.audio).play().catch(() => speakEn(word)); } else speakEn(word);
+      if (r && r.audio) { new Audio(r.audio).play().catch(() => speakEn(word)); } else speakEn(word);
     };
   }
   const speakEn = (t) => { if (!window.speechSynthesis) return; speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(t); u.lang = "en-US"; u.rate = 0.9; speechSynthesis.speak(u); };
