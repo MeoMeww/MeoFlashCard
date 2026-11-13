@@ -501,28 +501,143 @@
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
-  function importJSONFile() {
+  // Nhập file: JSON (sao lưu của app) hoặc CSV/TSV (xuất từ Flashcards World, Quizlet, Excel…)
+  function importFile(targetSet = null) {
     const inp = document.createElement("input");
     inp.type = "file";
-    inp.accept = ".json,application/json";
+    inp.accept = ".json,.csv,.tsv,.txt,application/json,text/csv,text/tab-separated-values,text/plain";
     inp.onchange = async () => {
-      try {
-        const obj = JSON.parse(await inp.files[0].text());
-        let count = 0;
-        const sets = obj.sets ? Object.values(obj.sets) : obj.cards ? [obj] : Array.isArray(obj) ? obj : [];
-        for (const s of sets) {
-          if (!s || s.deleted || !Array.isArray(s.cards)) continue;
-          const id = Store.data.sets[s.id] ? uid() : s.id || uid();
-          Store.data.sets[id] = normalizeSet({ ...s, id, updatedAt: now() });
-          count++;
-        }
-        Store.changed();
-        toast(`Đã nhập ${count} bộ thẻ`);
-        route();
-      } catch (e) { toast("File không hợp lệ"); }
+      const file = inp.files[0];
+      if (!file) return;
+      let text = await file.text();
+      if (text.charCodeAt(0) === 0xfeff) text = text.slice(1); // bỏ BOM
+      const looksJSON = /^\s*[\[{]/.test(text);
+      if (looksJSON) { try { importJSONText(JSON.parse(text)); return; } catch { /* rơi xuống CSV */ } }
+      importCSVDialog(text, file.name, targetSet);
     };
     inp.click();
   }
+  const importJSONFile = () => importFile(null);
+  function importJSONText(obj) {
+    let count = 0;
+    const sets = obj.sets ? Object.values(obj.sets) : obj.cards ? [obj] : Array.isArray(obj) ? obj : [];
+    for (const s of sets) {
+      if (!s || s.deleted || !Array.isArray(s.cards)) continue;
+      const id = Store.data.sets[s.id] ? uid() : s.id || uid();
+      Store.data.sets[id] = normalizeSet({ ...s, id, updatedAt: now() });
+      count++;
+    }
+    if (!count) { toast("File không có bộ thẻ nào"); return; }
+    Store.changed();
+    toast(`Đã nhập ${count} bộ thẻ`);
+    route();
+  }
+
+  // Bộ phân tích CSV chuẩn (ngoặc kép, dấu phẩy/xuống dòng trong ô, "" = ")
+  function parseCSV(text, delim) {
+    const rows = [];
+    let row = [], cell = "", q = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (q) {
+        if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; }
+        else cell += ch;
+      } else if (ch === '"') q = true;
+      else if (ch === delim) { row.push(cell); cell = ""; }
+      else if (ch === "\n" || ch === "\r") {
+        if (ch === "\r" && text[i + 1] === "\n") i++;
+        row.push(cell); cell = "";
+        if (row.some((c) => c.trim())) rows.push(row);
+        row = [];
+      } else cell += ch;
+    }
+    row.push(cell);
+    if (row.some((c) => c.trim())) rows.push(row);
+    return rows;
+  }
+  const detectDelim = (text) => {
+    const head = text.split(/\r?\n/).slice(0, 5).join("\n");
+    const n = (d) => (head.match(new RegExp("\\" + d, "g")) || []).length;
+    return n("\t") > n(",") ? "\t" : n(";") > n(",") ? ";" : ",";
+  };
+  // Chuyển bảng → danh sách thẻ. Nhận diện cột theo tiêu đề (Front/Back của Flashcards World, Term/Definition, …)
+  function rowsToCards(rows, swap) {
+    if (!rows.length) return { cards: [], headers: null };
+    const norm = (h) => String(h || "").trim().toLowerCase();
+    const h0 = rows[0].map(norm);
+    const find = (...names) => h0.findIndex((h) => names.includes(h));
+    let iFront = find("front", "term", "word", "question", "thuật ngữ", "từ"), iBack = find("back", "definition", "meaning", "answer", "định nghĩa", "nghĩa");
+    const hasHeader = iFront >= 0 || iBack >= 0;
+    const iEx = find("examples", "example", "ví dụ"), iLink = find("link", "url"), iId = find("card id", "id"), iTags = find("tags", "tag");
+    if (iFront < 0) iFront = 0;
+    if (iBack < 0) iBack = iFront === 0 ? 1 : 0;
+    const body = hasHeader ? rows.slice(1) : rows;
+    const cards = [];
+    for (const r of body) {
+      let front = (r[iFront] || "").trim(), back = (r[iBack] || "").trim();
+      if (!front && !back) continue;
+      if (swap) [front, back] = [back, front];
+      let def = esc(back).replace(/\n/g, "<br>");
+      const ex = iEx >= 0 ? (r[iEx] || "").trim() : "";
+      const link = iLink >= 0 ? (r[iLink] || "").trim() : "";
+      if (ex) def += (def ? "<br>" : "") + `<i>${esc(ex).replace(/\n/g, "<br>")}</i>`;
+      if (link) def += (def ? "<br>" : "") + `<span style="color:#6b7280">${esc(link)}</span>`;
+      const id = iId >= 0 && /^[\w-]{6,}$/.test(r[iId] || "") ? r[iId].trim() : uid();
+      const tags = iTags >= 0 ? (r[iTags] || "").split(/[,;]/).map((t) => t.trim()).filter(Boolean) : [];
+      cards.push({ ...newCard(), id, term: esc(front).replace(/\n/g, "<br>"), definition: def, tags });
+    }
+    return { cards, headers: hasHeader ? rows[0] : null };
+  }
+  function importCSVDialog(text, filename, targetSet) {
+    const delim = detectDelim(text);
+    const rows = parseCSV(text, delim);
+    if (!rows.length) { toast("File trống hoặc không đọc được"); return; }
+    const baseName = filename.replace(/\.(csv|tsv|txt)$/i, "").replace(/^[0-9a-f]{8}-/i, "").replace(/_+/g, " ").replace(/\s+/g, " ").trim();
+    const isFW = rows[0].map((h) => h.trim().toLowerCase()).includes("front") && rows[0].map((h) => h.trim().toLowerCase()).includes("card id");
+    const preview = (swap) => {
+      const { cards } = rowsToCards(rows, swap);
+      return { cards, html: cards.slice(0, 4).map((c) => `<tr><td>${c.term}</td><td>${c.definition}</td></tr>`).join("") };
+    };
+    openDialog(
+      `<h2>⬆ Nhập CSV${isFW ? " <span class=\"chip\">Flashcards World</span>" : ""}</h2>
+      <small>${esc(filename)} · ${rows.length - (rowsToCards(rows).headers ? 1 : 0)} dòng${rowsToCards(rows).headers ? ` · cột: ${rowsToCards(rows).headers.map(esc).join(", ")}` : " · không có dòng tiêu đề"}</small>
+      ${targetSet ? `<label class="row"><input type="radio" name="dest" value="append" checked> Thêm vào bộ <b>${esc(targetSet.title || "(Chưa đặt tên)")}</b></label>
+      <label class="row"><input type="radio" name="dest" value="new"> Tạo bộ thẻ mới</label>` : `<input type="hidden" name="dest" value="new">`}
+      <div id="titleWrap" ${targetSet ? 'style="display:none"' : ""}><label class="field-label">Tên bộ thẻ</label><input class="text" name="title" value="${esc(baseName)}"></div>
+      <label class="row"><input type="checkbox" name="swap"> Đảo cột: lấy <b>Back</b> làm Term, <b>Front</b> làm Definition</label>
+      <div class="sheet-wrap" style="max-height:220px;overflow:auto"><table class="sheet" style="min-width:0;table-layout:fixed;word-break:break-word"><thead><tr><th>Term</th><th>Definition</th></tr></thead><tbody id="csvPrev"></tbody></table></div>
+      <small class="muted">Cột Examples / Link (nếu có) được ghép vào Definition. Card ID được giữ để lần nhập sau không bị trùng thẻ.</small>
+      <div class="actions"><button class="btn" value="cancel">Huỷ</button><button class="btn primary" value="ok">Nhập</button></div>`,
+      (form) => {
+        const { cards } = rowsToCards(rows, form.swap.checked);
+        if (!cards.length) { toast("Không có thẻ nào để nhập"); return false; }
+        const dest = form.dest.value;
+        if (dest === "append" && targetSet) {
+          const have = new Set(targetSet.cards.map((c) => c.id));
+          const blank = (c) => !plainText(c.term) && !plainText(c.definition);
+          targetSet.cards = targetSet.cards.filter((c) => !blank(c));
+          let added = 0;
+          for (const c of cards) { if (have.has(c.id)) continue; targetSet.cards.push(c); added++; }
+          Store.touch(targetSet);
+          toast(added ? `Đã thêm ${added} thẻ` : "Tất cả thẻ đã có trong bộ này");
+          route();
+        } else {
+          const set = normalizeSet({ id: uid(), title: form.title.value.trim() || baseName || "Bộ thẻ CSV", description: isFW ? "Nhập từ Flashcards World" : "", cards });
+          Store.data.sets[set.id] = set;
+          Store.changed();
+          toast(`Đã tạo bộ "${set.title}" với ${cards.length} thẻ`);
+          location.hash = `#/set/${set.id}/edit`;
+          route();
+        }
+      }
+    );
+    const form = $("#dialogForm");
+    const draw = () => { $("#csvPrev", form).innerHTML = preview(form.swap.checked).html; };
+    form.swap.onchange = draw;
+    $$("input[name=dest]", form).forEach((r) => (r.onchange = () => { $("#titleWrap", form).style.display = form.dest.value === "new" ? "" : "none"; }));
+    draw();
+  }
+
   function normalizeSet(s) {
     return {
       id: s.id || uid(),
@@ -574,13 +689,13 @@
         <h1>Bộ thẻ của bạn</h1>
         <div class="row">
           <input class="text search" id="q" placeholder="🔍 Tìm bộ thẻ, thuật ngữ…">
-          <button class="btn" id="btnImport">⬆ Nhập JSON</button>
+          <button class="btn" id="btnImport">⬆ Nhập file (JSON / CSV)</button>
           <button class="btn primary" id="btnNew">＋ Tạo bộ mới</button>
         </div>
       </div>
       <div id="list"></div>`;
     $("#btnNew").onclick = () => { const s = Store.create(""); location.hash = `#/set/${s.id}/edit`; };
-    $("#btnImport").onclick = importJSONFile;
+    $("#btnImport").onclick = () => importFile(null);
     const draw = (q = "") => {
       const ql = q.toLowerCase();
       const items = sets.filter((s) => !ql || (s.title + " " + s.description + " " + s.cards.map((c) => plainText(c.term) + " " + plainText(c.definition) + " " + c.tags.join(" ")).join(" ")).toLowerCase().includes(ql));
@@ -828,6 +943,7 @@
         </div>
         <button class="btn" id="btnReverse" title="Tạo thêm thẻ đảo ngược (Definition → Term) cho mọi thẻ">⇄ Also create reverse card</button>
         <button class="btn" id="btnBulk">⚡ Nhập nhanh</button>
+        <button class="btn" id="btnCsv" title="Nhập file CSV/JSON vào bộ này">⬆ Nhập CSV</button>
         <a class="btn primary" id="btnSave" href="#/">✓ Save cards</a>
       </div>
       <div id="cardsWrap"></div>
@@ -835,6 +951,7 @@
 
       $("#btnDetails").onclick = () => editDetails(set, render);
       $("#btnBulk").onclick = () => bulkImport(set);
+      $("#btnCsv").onclick = () => importFile(set);
       $("#layoutSeg").onclick = (e) => {
         const b = e.target.closest("button[data-l]");
         if (!b) return;
