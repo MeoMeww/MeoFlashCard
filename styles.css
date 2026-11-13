@@ -292,6 +292,25 @@ body.zen main { padding-top: 12px; }
 .attack-top { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .attack-top .qtimer { margin: 0 0 0 auto; font-size: 16px; }
 
+/* ---------- Chế độ chữ to (Writing, Custom Quiz) ---------- */
+main.mode-wide { max-width: 1240px; }
+.big-q .quiz-q { padding: 40px 44px; min-height: 62vh; display: flex; flex-direction: column; justify-content: center; }
+.big-q .quiz-q .prompt { font-size: clamp(34px, 5vw, 64px); line-height: 1.25; margin-bottom: 32px; }
+.big-q .quiz-q > .muted:first-child { font-size: 15px; }
+.big-q input.text { font-size: clamp(22px, 2.6vw, 34px); padding: 16px 22px; border-radius: 14px; }
+.big-q .quiz-q .row > .btn { font-size: 18px; padding: 14px 22px; border-radius: 12px; }
+.big-q .quiz-opt { font-size: clamp(20px, 2.2vw, 28px); padding: 18px 22px; }
+.big-q .tf-def { font-size: clamp(22px, 2.6vw, 34px); }
+.big-q .fb { font-size: 19px; padding: 18px 22px; }
+.big-q .fb > .rich { font-size: clamp(26px, 3.2vw, 44px); line-height: 1.25; }
+.big-q .qtimer { font-size: 18px; }
+.ipa { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.ipa:empty { display: none; }
+.ipa-word { font-weight: 600; color: var(--text); }
+.ipa-text { font-family: "Charis SIL", "Doulos SIL", "Gentium Plus", "Segoe UI", "Noto Sans", Arial, sans-serif; font-size: 1.15em; color: #1d4ed8; }
+.big-q .ipa-text { font-size: clamp(22px, 2.6vw, 34px); }
+@media (max-width: 700px) { .big-q .quiz-q { padding: 22px 18px; min-height: 0; } }
+
 /* Toast */
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px); background: #1f2430; color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 14px; opacity: 0; pointer-events: none; transition: .25s; z-index: 100; }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }

@@ -142,6 +142,7 @@
     if (id === "flashcards") return M.viewStudy(app, set, filter);
     if (id === "mc") return M.viewQuiz(app, set, null, filter);
     markUsed(set);
+    app.classList.add("mode-wide");
     const cards = shuffle(set.cards.filter(usable).filter(filter));
     app.innerHTML = `
       <div class="study-bar">
@@ -204,10 +205,67 @@
     }
   }
   // Bảng "đáp án" + nút tiếp — dùng chung
-  const feedback = (ok, c, note = "") => `<div class="fb ${ok ? "ok" : "bad"}">
+  const feedback = (ok, c, note = "") => {
+    setTimeout(() => fillIPA(c), 0);
+    return `<div class="fb ${ok ? "ok" : "bad"}">
       <b>${ok ? "✓ Chính xác!" : "✗ Chưa đúng"}</b> ${note}
       <div class="rich" style="margin-top:6px">${answerHtml(c)}</div>
+      <div class="ipa" id="ipaBox"></div>
       <div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn primary" id="nextBtn">Tiếp → <small>(Enter)</small></button></div></div>`;
+  };
+
+  /* ===================== Phiên âm (IPA) — Free Dictionary API, có cache ===================== */
+  const IPA_CACHE_KEY = "mc-ipa-cache";
+  const ipaCache = lsGet(IPA_CACHE_KEY, {});
+  const saveIpaCache = () => { const keys = Object.keys(ipaCache); if (keys.length > 2000) keys.slice(0, 500).forEach((k) => delete ipaCache[k]); lsSet(IPA_CACHE_KEY, ipaCache); };
+  // Mặt nào của thẻ là tiếng Anh (chỉ chữ Latin không dấu) thì tra phiên âm mặt đó, ưu tiên mặt đáp án
+  const englishSide = (c) => {
+    const isEn = (t) => /^[A-Za-z][A-Za-z' .-]{0,60}$/.test(t) && !/\s(và|là|của|một|những|sự)\s/i.test(t);
+    const a = answerOf(c).split(/\s*\/\s*/)[0].trim(), t = termText(c).trim();
+    return isEn(a) ? a : isEn(t) ? t : "";
+  };
+  async function lookupWord(w) {
+    const key = w.toLowerCase();
+    if (ipaCache[key] !== undefined) return ipaCache[key];
+    let res = null;
+    try {
+      const r = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(key));
+      if (r.ok) {
+        const j = await r.json();
+        const ph = (j[0]?.phonetics || []);
+        const text = (ph.find((p) => p.text && p.audio) || ph.find((p) => p.text) || {}).text || j[0]?.phonetic || "";
+        const audio = (ph.find((p) => p.audio) || {}).audio || "";
+        res = { text, audio };
+      } else if (r.status === 404) res = { text: "", audio: "" };
+    } catch { return null; } // lỗi mạng: không cache
+    if (res) { ipaCache[key] = res; saveIpaCache(); }
+    return res;
+  }
+  async function getIPA(phrase) {
+    const whole = await lookupWord(phrase);
+    if (whole && whole.text) return whole;
+    const words = phrase.split(/\s+/).filter(Boolean);
+    if (words.length < 2 || words.length > 5) return whole;
+    const parts = await Promise.all(words.map(lookupWord));
+    if (parts.some((p) => !p || !p.text)) return whole;
+    return { text: parts.map((p) => p.text.replace(/^\/|\/$/g, "")).join(" ").replace(/^/, "/").replace(/$/, "/"), audio: "" };
+  }
+  async function fillIPA(c) {
+    const box = document.getElementById("ipaBox");
+    if (!box) return;
+    const word = englishSide(c);
+    if (!word) return;
+    box.innerHTML = `<span class="muted" style="font-size:14px">đang tra phiên âm…</span>`;
+    const r = await getIPA(word);
+    const el = document.getElementById("ipaBox");
+    if (!el || el !== box) return;
+    if (!r || !r.text) { box.innerHTML = ""; return; }
+    box.innerHTML = `<span class="ipa-word">${esc(word)}</span> <span class="ipa-text">${esc(r.text)}</span> <button type="button" class="btn small" id="ipaPlay" title="Nghe phát âm">🔊</button>`;
+    document.getElementById("ipaPlay").onclick = () => {
+      if (r.audio) { new Audio(r.audio).play().catch(() => speakEn(word)); } else speakEn(word);
+    };
+  }
+  const speakEn = (t) => { if (!window.speechSynthesis) return; speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(t); u.lang = "en-US"; u.rate = 0.9; speechSynthesis.speak(u); };
   const bindNext = (ctx, fn) => { $("#nextBtn").onclick = fn; $("#nextBtn").focus(); ctx.onKey = (e) => { if (e.key === "Enter") { e.preventDefault(); fn(); } }; };
 
   /* ===================== Các dạng câu hỏi (dùng lại trong Writing & Custom Quiz) ===================== */
@@ -331,6 +389,7 @@
 
   // --- Writing ---
   MODES.writing = (ctx) => {
+    ctx.stage.classList.add("big-q");
     const list = ctx.cards.filter(hasAnswer).map((card) => ({ card, type: "writing" }));
     if (!list.length) return empty(ctx, "Thẻ cần có Definition (hoặc ô trống [...]) để luyện viết.");
     runQuestions(ctx, list);
@@ -338,6 +397,7 @@
 
   // --- Custom Quiz ---
   MODES.custom = (ctx) => {
+    ctx.stage.classList.add("big-q");
     const pool = ctx.cards.filter(hasAnswer);
     if (pool.length < 1) return empty(ctx, "Cần thẻ có Definition để tạo bài kiểm tra.");
     const prev = lsGet("mc-custom", { n: 10, t: 0, mc: true, w: true, tf: true });

@@ -670,6 +670,7 @@
     const r = parseRoute();
     const app = $("#app");
     app.classList.toggle("wide", r.page === "edit");
+    app.classList.remove("mode-wide");
     window.scrollTo(0, 0);
     if (r.page === "library") return viewLibrary(app);
     const set = Store.get(r.id);
